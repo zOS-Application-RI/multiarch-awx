@@ -18,6 +18,7 @@ USER root
 RUN dnf -y update && dnf install -y 'dnf-command(config-manager)' && \
     dnf config-manager --set-enabled crb && \
     dnf -y install \
+    cargo \
     gcc \
     gcc-c++ \
     git-core \
@@ -30,6 +31,7 @@ RUN dnf -y update && dnf install -y 'dnf-command(config-manager)' && \
     nodejs \
 {% endif %}
     nss \
+    openssl-devel \
     openldap-devel \
     patch \
     postgresql \
@@ -128,6 +130,7 @@ RUN rm -rf /root/.cache && rm -rf /tmp/*
 # Install development/test requirements
 RUN dnf -y install \
     crun \
+    cargo \
     gdb \
     gtk3 \
     gettext \
@@ -144,7 +147,9 @@ RUN dnf -y install \
     nodejs \
     nss \
     make \
+    openssl-devel \
     patch \
+    pip \
     socat \
     tmux \
     wget \
@@ -159,7 +164,12 @@ RUN pip3 install black git+https://github.com/coderanger/supervisor-stdout
 # Add it back to the list above if the repo ever straighten up.
 RUN dnf --enablerepo=baseos-debug -y install python3-debuginfo || :
 
-RUN dnf install -y epel-next-release && dnf install -y inotify-tools && dnf remove -y epel-next-release
+#RUN dnf install -y epel-next-release && dnf install -y inotify-tools && dnf remove -y epel-next-release
+#RUN yum install -y epel-release && yum update && dnf install -y inotify-tools 
+RUN wget https://ftp.riken.jp/Linux/fedora/epel/epel-release-latest-9.noarch.rpm \
+    && dnf localinstall -y epel-release-latest-9.noarch.rpm \
+    && dnf install -y inotify-tools \
+    && dnf remove -y epel-release-latest-9.noarch.rpm 
 {% endif %}
 
 # Copy app from builder
