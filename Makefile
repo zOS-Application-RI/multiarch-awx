@@ -9,7 +9,8 @@ VERSION := $(shell $(PYTHON) setup.py --version)
 COLLECTION_VERSION := $(shell $(PYTHON) setup.py --version | cut -d . -f 1-3)
 
 # NOTE: This defaults the container image version to the branch that's active
-COMPOSE_TAG ?= $(GIT_BRANCH)
+# COMPOSE_TAG ?= $(GIT_BRANCH)
+COMPOSE_TAG ?= latest
 MAIN_NODE_TYPE ?= hybrid
 # If set to true docker-compose will also start a keycloak instance
 KEYCLOAK ?= false
@@ -24,10 +25,11 @@ GRAFANA ?= false
 
 VENV_BASE ?= /var/lib/awx/venv
 
-DEV_DOCKER_TAG_BASE ?= ghcr.io/ansible
-DEVEL_IMAGE_NAME ?= $(DEV_DOCKER_TAG_BASE)/awx_devel:$(COMPOSE_TAG)
+DEV_DOCKER_TAG_BASE ?= docker.io/ashish1981
+# DEVEL_IMAGE_NAME ?= $(DEV_DOCKER_TAG_BASE)/awx_devel:$(COMPOSE_TAG)
+DEVEL_IMAGE_NAME ?= $(DEV_DOCKER_TAG_BASE)/awx
 
-RECEPTOR_IMAGE ?= quay.io/ansible/receptor:devel
+RECEPTOR_IMAGE ?= docker.io/ashish1981/receptor
 
 # Python packages to install only from source (not from binary wheels)
 # Comma separated list
@@ -466,8 +468,8 @@ docker-compose-sources: .git/hooks/pre-commit
 	fi;
 
 	ansible-playbook -i tools/docker-compose/inventory tools/docker-compose/ansible/sources.yml \
-	    -e awx_image=$(DEV_DOCKER_TAG_BASE)/awx_devel \
-	    -e awx_image_tag=$(COMPOSE_TAG) \
+	    -e awx_image=$(DEV_DOCKER_TAG_BASE)/awx \
+	    -e awx_image_tag=latest \
 	    -e receptor_image=$(RECEPTOR_IMAGE) \
 	    -e control_plane_node_count=$(CONTROL_PLANE_NODE_COUNT) \
 	    -e execution_node_count=$(EXECUTION_NODE_COUNT) \
@@ -515,7 +517,7 @@ docker-compose-build:
 	ansible-playbook tools/ansible/dockerfile.yml -e build_dev=True -e receptor_image=$(RECEPTOR_IMAGE)
 	DOCKER_BUILDKIT=1 docker build -t $(DEVEL_IMAGE_NAME) \
 	    --build-arg BUILDKIT_INLINE_CACHE=1 \
-	    --cache-from=$(DEV_DOCKER_TAG_BASE)/awx_devel:$(COMPOSE_TAG) .
+	    --cache-from=$(DEV_DOCKER_TAG_BASE)/awx:$(COMPOSE_TAG) .
 
 docker-clean:
 	$(foreach container_id,$(shell docker ps -f name=tools_awx -aq && docker ps -f name=tools_receptor -aq),docker stop $(container_id); docker rm -f $(container_id);)

@@ -19,8 +19,8 @@ def test_default_to_jobs_default(set_up_defaults, organization):
     which are populated by the installer
     """
     # Fill in some other unrelated EEs
-    ExecutionEnvironment.objects.create(name='Steves environment', image='quay.io/ansible/awx-ee')
-    ExecutionEnvironment(name=settings.GLOBAL_JOB_EXECUTION_ENVIRONMENTS[0]['name'], image='quay.io/ansible/awx-ee', organization=organization)
+    ExecutionEnvironment.objects.create(name='Steves environment', image='docker.io/ashish1981/awx-ee')
+    ExecutionEnvironment(name=settings.GLOBAL_JOB_EXECUTION_ENVIRONMENTS[0]['name'], image='docker.io/ashish1981/awx-ee', organization=organization)
     default_ee = get_default_execution_environment()
     assert default_ee.image == settings.GLOBAL_JOB_EXECUTION_ENVIRONMENTS[0]['image']
     assert default_ee.name == settings.GLOBAL_JOB_EXECUTION_ENVIRONMENTS[0]['name']
@@ -41,6 +41,6 @@ def test_default_to_control_plane(set_up_defaults):
 @pytest.mark.django_db
 def test_user_default(set_up_defaults):
     """If superuser has configured a default, then their preference should come first, of course"""
-    ee = ExecutionEnvironment.objects.create(name='Steves environment', image='quay.io/ansible/awx-ee')
+    ee = ExecutionEnvironment.objects.create(name='Steves environment', image='docker.io/ashish1981/awx-ee')
     with override_settings(DEFAULT_EXECUTION_ENVIRONMENT=ee):
         assert get_default_execution_environment() == ee

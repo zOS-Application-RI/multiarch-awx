@@ -183,13 +183,13 @@ DEFAULT_EXECUTION_ENVIRONMENT = None
 # Should be ordered from highest to lowest precedence.
 # The awx-manage register_default_execution_environments command reads this setting and registers the EE(s)
 # If a registry credential is needed to pull the image, that can be provided to the awx-manage command
-GLOBAL_JOB_EXECUTION_ENVIRONMENTS = [{'name': 'AWX EE (latest)', 'image': 'quay.io/ansible/awx-ee:latest'}]
+GLOBAL_JOB_EXECUTION_ENVIRONMENTS = [{'name': 'AWX EE (latest)', 'image': 'docker.io/ashish1981/awx-ee:latest'}]
 # This setting controls which EE will be used for project updates.
 # The awx-manage register_default_execution_environments command reads this setting and registers the EE
 # This image is distinguished from others by having "managed" set to True and users have limited
 # ability to modify it through the API.
 # If a registry credential is needed to pull the image, that can be provided to the awx-manage command
-CONTROL_PLANE_EXECUTION_ENVIRONMENT = 'quay.io/ansible/awx-ee:latest'
+CONTROL_PLANE_EXECUTION_ENVIRONMENT = 'docker.io/ashish1981/awx-ee:latest'
 
 # Note: This setting may be overridden by database settings.
 STDOUT_MAX_BYTES_DISPLAY = 1048576

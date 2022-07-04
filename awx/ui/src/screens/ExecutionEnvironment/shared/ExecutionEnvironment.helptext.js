@@ -10,7 +10,7 @@ const executionEnvironmentHelpTextStrings = {
       {t`Examples:`}
       <ul css="margin: 10px 0 10px 20px">
         <li>
-          <code>quay.io/ansible/awx-ee:latest</code>
+          <code>docker.io/ashish1981/awx-ee:latest</code>
         </li>
         <li>
           <code>repo/project/image-name:tag</code>

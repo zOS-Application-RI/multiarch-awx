@@ -39,7 +39,7 @@ describe('<ProjectDetail />', () => {
       default_environment: {
         id: 12,
         name: 'Bar',
-        image: 'quay.io/ansible/awx-ee',
+        image: 'docker.io/ashish1981/awx-ee',
       },
       credential: {
         id: 1000,

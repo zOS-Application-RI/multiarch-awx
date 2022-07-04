@@ -23,7 +23,7 @@ describe('<OrganizationEdit />', () => {
       default_environment: {
         id: 1,
         name: 'Baz',
-        image: 'quay.io/ansible/awx-ee',
+        image: 'docker.io/ashish1981/awx-ee',
       },
     },
   };

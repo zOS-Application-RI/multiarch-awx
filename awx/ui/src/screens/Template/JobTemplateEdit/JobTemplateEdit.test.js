@@ -65,7 +65,7 @@ const mockJobTemplate = {
       id: 1,
       name: 'Default EE',
       description: '',
-      image: 'quay.io/ansible/awx-ee',
+      image: 'docker.io/ashish1981/awx-ee',
     },
     user_capabilities: {
       edit: true,
@@ -199,7 +199,7 @@ const mockExecutionEnvironment = [
     id: 1,
     name: 'Default EE',
     description: '',
-    image: 'quay.io/ansible/awx-ee',
+    image: 'docker.io/ashish1981/awx-ee',
   },
 ];
 

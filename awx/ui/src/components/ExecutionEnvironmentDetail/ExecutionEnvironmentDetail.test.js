@@ -6,7 +6,7 @@ import ExecutionEnvironmentDetail from './ExecutionEnvironmentDetail';
 const mockExecutionEnvironment = {
   id: 2,
   name: 'Foo',
-  image: 'quay.io/ansible/awx-ee',
+  image: 'docker.io/ashish1981/awx-ee',
   pull: 'missing',
   description: '',
 };
