@@ -6,15 +6,17 @@ from datetime import timedelta
 import json
 import yaml
 import logging
+import time
 import os
 import subprocess
 import re
 import stat
+import sys
 import urllib.parse
 import threading
 import contextlib
 import tempfile
-from functools import reduce, wraps
+import functools
 
 # Django
 from django.core.exceptions import ObjectDoesNotExist, FieldDoesNotExist
@@ -72,20 +74,22 @@ __all__ = [
     'NullablePromptPseudoField',
     'model_instance_diff',
     'parse_yaml_or_json',
+    'is_testing',
     'RequireDebugTrueOrTest',
     'has_model_field_prefetched',
     'set_environ',
     'IllegalArgumentError',
     'get_custom_venv_choices',
-    'get_external_account',
-    'task_manager_bulk_reschedule',
-    'schedule_task_manager',
+    'ScheduleTaskManager',
+    'ScheduleDependencyManager',
+    'ScheduleWorkflowManager',
     'classproperty',
     'create_temporary_fifo',
     'truncate_stdout',
     'deepmerge',
     'get_event_partition_epoch',
     'cleanup_new_process',
+    'log_excess_runtime',
 ]
 
 
@@ -142,6 +146,19 @@ def underscore_to_camelcase(s):
     return ''.join(x.capitalize() or '_' for x in s.split('_'))
 
 
+@functools.cache
+def is_testing(argv=None):
+    '''Return True if running django or py.test unit tests.'''
+    if 'PYTEST_CURRENT_TEST' in os.environ.keys():
+        return True
+    argv = sys.argv if argv is None else argv
+    if len(argv) >= 1 and ('py.test' in argv[0] or 'py/test.py' in argv[0]):
+        return True
+    elif len(argv) >= 2 and argv[1] == 'test':
+        return True
+    return False
+
+
 class RequireDebugTrueOrTest(logging.Filter):
     """
     Logging filter to output when in DEBUG mode or running tests.
@@ -150,7 +167,7 @@ class RequireDebugTrueOrTest(logging.Filter):
     def filter(self, record):
         from django.conf import settings
 
-        return settings.DEBUG or settings.IS_TESTING()
+        return settings.DEBUG or is_testing()
 
 
 class IllegalArgumentError(ValueError):
@@ -172,7 +189,7 @@ def memoize(ttl=60, cache_key=None, track_function=False, cache=None):
     cache = cache or get_memoize_cache()
 
     def memoize_decorator(f):
-        @wraps(f)
+        @functools.wraps(f)
         def _memoizer(*args, **kwargs):
             if track_function:
                 cache_dict_key = slugify('%r %r' % (args, kwargs))
@@ -262,9 +279,15 @@ def update_scm_url(scm_type, url, username=True, password=True, check_special_ca
                 userpass, hostpath = url.split('@', 1)
             else:
                 userpass, hostpath = '', url
-            if hostpath.count(':') > 1:
+            # Handle IPv6 here. In this case, we might have hostpath of:
+            # [fd00:1234:2345:6789::11]:example/foo.git
+            if hostpath.startswith('[') and ']:' in hostpath:
+                host, path = hostpath.split(']:', 1)
+                host = host + ']'
+            elif hostpath.count(':') > 1:
                 raise ValueError(_('Invalid %s URL') % scm_type)
-            host, path = hostpath.split(':', 1)
+            else:
+                host, path = hostpath.split(':', 1)
             # if not path.startswith('/') and not path.startswith('~/'):
             #    path = '~/%s' % path
             # if path.startswith('/'):
@@ -323,7 +346,11 @@ def update_scm_url(scm_type, url, username=True, password=True, check_special_ca
         netloc = u':'.join([urllib.parse.quote(x, safe='') for x in (netloc_username, netloc_password) if x])
     else:
         netloc = u''
-    netloc = u'@'.join(filter(None, [netloc, parts.hostname]))
+    # urllib.parse strips brackets from IPv6 addresses, so we need to add them back in
+    hostname = parts.hostname
+    if hostname and ':' in hostname and '[' in url and ']' in url:
+        hostname = f'[{hostname}]'
+    netloc = u'@'.join(filter(None, [netloc, hostname]))
     if parts.port:
         netloc = u':'.join([netloc, str(parts.port)])
     new_url = urllib.parse.urlunsplit([parts.scheme, netloc, parts.path, parts.query, parts.fragment])
@@ -333,7 +360,6 @@ def update_scm_url(scm_type, url, username=True, password=True, check_special_ca
 
 
 def get_allowed_fields(obj, serializer_mapping):
-
     if serializer_mapping is not None and obj.__class__ in serializer_mapping:
         serializer_actual = serializer_mapping[obj.__class__]()
         allowed_fields = [x for x in serializer_actual.fields if not serializer_actual.fields[x].read_only] + ['id']
@@ -530,6 +556,10 @@ def copy_m2m_relationships(obj1, obj2, fields, kwargs=None):
                 if kwargs and field_name in kwargs:
                     override_field_val = kwargs[field_name]
                     if isinstance(override_field_val, (set, list, QuerySet)):
+                        # Labels are additive so we are going to add any src labels in addition to the override labels
+                        if field_name == 'labels':
+                            for jt_label in src_field_value.all():
+                                getattr(obj2, field_name).add(jt_label.id)
                         getattr(obj2, field_name).add(*override_field_val)
                         continue
                     if override_field_val.__class__.__name__ == 'ManyRelatedManager':
@@ -599,7 +629,6 @@ def prefetch_page_capabilities(model, page, prefetch_list, user):
         mapping[obj.id] = {}
 
     for prefetch_entry in prefetch_list:
-
         display_method = None
         if type(prefetch_entry) is dict:
             display_method = list(prefetch_entry.keys())[0]
@@ -846,6 +875,66 @@ def get_mem_effective_capacity(mem_bytes):
 
 _inventory_updates = threading.local()
 _task_manager = threading.local()
+_dependency_manager = threading.local()
+_workflow_manager = threading.local()
+
+
+@contextlib.contextmanager
+def task_manager_bulk_reschedule():
+    managers = [ScheduleTaskManager(), ScheduleWorkflowManager(), ScheduleDependencyManager()]
+    """Context manager to avoid submitting task multiple times."""
+    try:
+        for m in managers:
+            m.previous_flag = getattr(m.manager_threading_local, 'bulk_reschedule', False)
+            m.previous_value = getattr(m.manager_threading_local, 'needs_scheduling', False)
+            m.manager_threading_local.bulk_reschedule = True
+            m.manager_threading_local.needs_scheduling = False
+        yield
+    finally:
+        for m in managers:
+            m.manager_threading_local.bulk_reschedule = m.previous_flag
+            if m.manager_threading_local.needs_scheduling:
+                m.schedule()
+            m.manager_threading_local.needs_scheduling = m.previous_value
+
+
+class ScheduleManager:
+    def __init__(self, manager, manager_threading_local):
+        self.manager = manager
+        self.manager_threading_local = manager_threading_local
+
+    def _schedule(self):
+        from django.db import connection
+
+        # runs right away if not in transaction
+        connection.on_commit(lambda: self.manager.delay())
+
+    def schedule(self):
+        if getattr(self.manager_threading_local, 'bulk_reschedule', False):
+            self.manager_threading_local.needs_scheduling = True
+            return
+        self._schedule()
+
+
+class ScheduleTaskManager(ScheduleManager):
+    def __init__(self):
+        from awx.main.scheduler.tasks import task_manager
+
+        super().__init__(task_manager, _task_manager)
+
+
+class ScheduleDependencyManager(ScheduleManager):
+    def __init__(self):
+        from awx.main.scheduler.tasks import dependency_manager
+
+        super().__init__(dependency_manager, _dependency_manager)
+
+
+class ScheduleWorkflowManager(ScheduleManager):
+    def __init__(self):
+        from awx.main.scheduler.tasks import workflow_manager
+
+        super().__init__(workflow_manager, _workflow_manager)
 
 
 @contextlib.contextmanager
@@ -859,37 +948,6 @@ def ignore_inventory_computed_fields():
         yield
     finally:
         _inventory_updates.is_updating = previous_value
-
-
-def _schedule_task_manager():
-    from awx.main.scheduler.tasks import run_task_manager
-    from django.db import connection
-
-    # runs right away if not in transaction
-    connection.on_commit(lambda: run_task_manager.delay())
-
-
-@contextlib.contextmanager
-def task_manager_bulk_reschedule():
-    """Context manager to avoid submitting task multiple times."""
-    try:
-        previous_flag = getattr(_task_manager, 'bulk_reschedule', False)
-        previous_value = getattr(_task_manager, 'needs_scheduling', False)
-        _task_manager.bulk_reschedule = True
-        _task_manager.needs_scheduling = False
-        yield
-    finally:
-        _task_manager.bulk_reschedule = previous_flag
-        if _task_manager.needs_scheduling:
-            _schedule_task_manager()
-        _task_manager.needs_scheduling = previous_value
-
-
-def schedule_task_manager():
-    if getattr(_task_manager, 'bulk_reschedule', False):
-        _task_manager.needs_scheduling = True
-        return
-    _schedule_task_manager()
 
 
 @contextlib.contextmanager
@@ -947,7 +1005,7 @@ def getattrd(obj, name, default=NoDefaultProvided):
     """
 
     try:
-        return reduce(getattr, name.split("."), obj)
+        return functools.reduce(getattr, name.split("."), obj)
     except AttributeError:
         if default != NoDefaultProvided:
             return default
@@ -1028,29 +1086,6 @@ def get_search_fields(model):
 def has_model_field_prefetched(model_obj, field_name):
     # NOTE: Update this function if django internal implementation changes.
     return getattr(getattr(model_obj, field_name, None), 'prefetch_cache_name', '') in getattr(model_obj, '_prefetched_objects_cache', {})
-
-
-def get_external_account(user):
-    from django.conf import settings
-
-    account_type = None
-    if getattr(settings, 'AUTH_LDAP_SERVER_URI', None):
-        try:
-            if user.pk and user.profile.ldap_dn and not user.has_usable_password():
-                account_type = "ldap"
-        except AttributeError:
-            pass
-    if (
-        getattr(settings, 'SOCIAL_AUTH_GOOGLE_OAUTH2_KEY', None)
-        or getattr(settings, 'SOCIAL_AUTH_GITHUB_KEY', None)
-        or getattr(settings, 'SOCIAL_AUTH_GITHUB_ORG_KEY', None)
-        or getattr(settings, 'SOCIAL_AUTH_GITHUB_TEAM_KEY', None)
-        or getattr(settings, 'SOCIAL_AUTH_SAML_ENABLED_IDPS', None)
-    ) and user.social_auth.all():
-        account_type = "social"
-    if (getattr(settings, 'RADIUS_SERVER', None) or getattr(settings, 'TACACSPLUS_HOST', None)) and user.enterprise_auth.all():
-        account_type = "enterprise"
-    return account_type
 
 
 class classproperty:
@@ -1143,7 +1178,7 @@ def cleanup_new_process(func):
     Cleanup django connection, cache connection, before executing new thread or processes entry point, func.
     """
 
-    @wraps(func)
+    @functools.wraps(func)
     def wrapper_cleanup_new_process(*args, **kwargs):
         from awx.conf.settings import SettingsWrapper  # noqa
 
@@ -1153,3 +1188,34 @@ def cleanup_new_process(func):
         return func(*args, **kwargs)
 
     return wrapper_cleanup_new_process
+
+
+def log_excess_runtime(func_logger, cutoff=5.0, debug_cutoff=5.0, msg=None, add_log_data=False):
+    def log_excess_runtime_decorator(func):
+        @functools.wraps(func)
+        def _new_func(*args, **kwargs):
+            start_time = time.time()
+            log_data = {'name': repr(func.__name__)}
+
+            if add_log_data:
+                return_value = func(*args, log_data=log_data, **kwargs)
+            else:
+                return_value = func(*args, **kwargs)
+
+            log_data['delta'] = time.time() - start_time
+            if isinstance(return_value, dict):
+                log_data.update(return_value)
+
+            if msg is None:
+                record_msg = 'Running {name} took {delta:.2f}s'
+            else:
+                record_msg = msg
+            if log_data['delta'] > cutoff:
+                func_logger.info(record_msg.format(**log_data))
+            elif log_data['delta'] > debug_cutoff:
+                func_logger.debug(record_msg.format(**log_data))
+            return return_value
+
+        return _new_func
+
+    return log_excess_runtime_decorator

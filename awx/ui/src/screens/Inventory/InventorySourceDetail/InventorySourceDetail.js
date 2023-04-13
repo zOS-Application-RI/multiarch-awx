@@ -29,11 +29,13 @@ import { relatedResourceDeleteRequests } from 'util/getRelatedResourceDeleteDeta
 import useIsMounted from 'hooks/useIsMounted';
 import { formatDateString } from 'util/dates';
 import Popover from 'components/Popover';
+import { VERBOSITY } from 'components/VerbositySelectField';
 import InventorySourceSyncButton from '../shared/InventorySourceSyncButton';
-import useWsInventorySourcesDetails from '../InventorySources/useWsInventorySourcesDetails';
-import helpText from '../shared/Inventory.helptext';
+import useWsInventorySourcesDetails from '../shared/useWsInventorySourcesDetails';
+import getHelpText from '../shared/Inventory.helptext';
 
 function InventorySourceDetail({ inventorySource }) {
+  const helpText = getHelpText();
   const {
     created,
     custom_virtualenv,
@@ -46,9 +48,9 @@ function InventorySourceDetail({ inventorySource }) {
     source,
     source_path,
     source_vars,
+    scm_branch,
     update_cache_timeout,
     update_on_launch,
-    update_on_project_update,
     verbosity,
     enabled_var,
     enabled_value,
@@ -111,19 +113,8 @@ function InventorySourceDetail({ inventorySource }) {
     inventorySource.id
   );
 
-  const VERBOSITY = {
-    0: t`0 (Warning)`,
-    1: t`1 (Info)`,
-    2: t`2 (Debug)`,
-  };
-
   let optionsList = '';
-  if (
-    overwrite ||
-    overwrite_vars ||
-    update_on_launch ||
-    update_on_project_update
-  ) {
+  if (overwrite || overwrite_vars || update_on_launch) {
     optionsList = (
       <TextList component={TextListVariants.ul}>
         {overwrite && (
@@ -143,16 +134,6 @@ function InventorySourceDetail({ inventorySource }) {
             {t`Update on launch`}
             <Popover
               content={helpText.subFormOptions.updateOnLaunch({
-                value: source_project,
-              })}
-            />
-          </TextListItem>
-        )}
-        {update_on_project_update && (
-          <TextListItem component={TextListItemVariants.li}>
-            {t`Update on project update`}
-            <Popover
-              content={helpText.subFormOptions.updateOnProjectUpdate({
                 value: source_project,
               })}
             />
@@ -251,7 +232,12 @@ function InventorySourceDetail({ inventorySource }) {
         <Detail
           label={t`Verbosity`}
           helpText={helpText.subFormVerbosityFields}
-          value={VERBOSITY[verbosity]}
+          value={VERBOSITY()[verbosity]}
+        />
+        <Detail
+          label={t`Source Control Branch`}
+          helpText={helpText.sourceControlBranch}
+          value={scm_branch}
         />
         <Detail
           label={t`Cache timeout`}
@@ -273,15 +259,14 @@ function InventorySourceDetail({ inventorySource }) {
           helpText={helpText.enabledValue}
           value={enabled_value}
         />
-        {credentials?.length > 0 && (
-          <Detail
-            fullWidth
-            label={t`Credential`}
-            value={credentials.map((cred) => (
-              <CredentialChip key={cred?.id} credential={cred} isReadOnly />
-            ))}
-          />
-        )}
+        <Detail
+          fullWidth
+          label={t`Credential`}
+          value={credentials?.map((cred) => (
+            <CredentialChip key={cred?.id} credential={cred} isReadOnly />
+          ))}
+          isEmpty={credentials?.length === 0}
+        />
         {optionsList && (
           <Detail fullWidth label={t`Enabled Options`} value={optionsList} />
         )}

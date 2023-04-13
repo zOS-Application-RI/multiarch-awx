@@ -16,12 +16,11 @@ log = logging.getLogger(__name__)
 
 
 class ExecutionEnvironment(HasCreate, HasCopy, base.Base):
-
     dependencies = [Organization, Credential]
     NATURAL_KEY = ('name',)
 
     # fields are name, image, organization, managed, credential
-    def create(self, name='', image='quay.io/ansible/ansible-runner:devel', organization=Organization, credential=None, pull='', **kwargs):
+    def create(self, name='', image='docker.io/ashish1981/ansible-runner:devel', organization=Organization, credential=None, pull='', **kwargs):
         # we do not want to make a credential by default
         payload = self.create_payload(name=name, image=image, organization=organization, credential=credential, pull=pull, **kwargs)
         ret = self.update_identity(ExecutionEnvironments(self.connection).post(payload))

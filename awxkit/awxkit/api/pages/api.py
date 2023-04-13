@@ -36,14 +36,18 @@ EXPORTABLE_RELATIONS = ['Roles', 'NotificationTemplates', 'WorkflowJobTemplateNo
 # These are special-case related objects, where we want only in this
 # case to export a full object instead of a natural key reference.
 DEPENDENT_EXPORT = [
-    ('JobTemplate', 'labels'),
-    ('JobTemplate', 'survey_spec'),
-    ('WorkflowJobTemplate', 'labels'),
-    ('WorkflowJobTemplate', 'survey_spec'),
-    ('WorkflowJobTemplate', 'workflow_nodes'),
-    ('Inventory', 'groups'),
-    ('Inventory', 'hosts'),
-    ('Inventory', 'labels'),
+    ('JobTemplate', 'Label'),
+    ('JobTemplate', 'SurveySpec'),
+    ('JobTemplate', 'Schedule'),
+    ('WorkflowJobTemplate', 'Label'),
+    ('WorkflowJobTemplate', 'SurveySpec'),
+    ('WorkflowJobTemplate', 'Schedule'),
+    ('WorkflowJobTemplate', 'WorkflowJobTemplateNode'),
+    ('InventorySource', 'Schedule'),
+    ('Inventory', 'Group'),
+    ('Inventory', 'Host'),
+    ('Inventory', 'Label'),
+    ('WorkflowJobTemplateNode', 'WorkflowApprovalTemplate'),
 ]
 
 
@@ -57,11 +61,11 @@ DEPENDENT_NONEXPORT = [
     ('Group', 'all_hosts'),
     ('Group', 'potential_children'),
     ('Host', 'all_groups'),
+    ('WorkflowJobTemplateNode', 'create_approval_template'),
 ]
 
 
 class Api(base.Base):
-
     pass
 
 
@@ -69,7 +73,6 @@ page.register_page(resources.api, Api)
 
 
 class ApiV2(base.Base):
-
     # Export methods
 
     def _export(self, _page, post_fields):
@@ -85,6 +88,7 @@ class ApiV2(base.Base):
         # Note: doing _page[key] automatically parses json blob strings, which can be a problem.
         fields = {key: _page.json[key] for key in post_fields if key in _page.json and key not in _page.related and key != 'id'}
 
+        # iterate over direct fields in the object
         for key in post_fields:
             if key in _page.related:
                 related = _page.related[key]
@@ -114,6 +118,12 @@ class ApiV2(base.Base):
                     return None
                 log.warning("Foreign key %r export failed for object %s, setting to null", key, _page.endpoint)
                 continue
+
+            # Workflow approval templates have a special creation endpoint,
+            # therefore we are skipping the export via natural key.
+            if rel_endpoint.__item_class__.__name__ == 'WorkflowApprovalTemplate':
+                continue
+
             rel_natural_key = rel_endpoint.get_natural_key(self._cache)
             if rel_natural_key is None:
                 log.error("Unable to construct a natural key for foreign key %r of object %s.", key, _page.endpoint)
@@ -121,19 +131,38 @@ class ApiV2(base.Base):
                 return None  # This foreign key has unresolvable dependencies
             fields[key] = rel_natural_key
 
+        # iterate over related fields in the object
         related = {}
         for key, rel_endpoint in _page.related.items():
-            if key in post_fields or not rel_endpoint:
+            # skip if no endpoint for this related object
+            if not rel_endpoint:
                 continue
 
             rel = rel_endpoint._create()
+
+            if rel.__item_class__.__name__ != 'WorkflowApprovalTemplate':
+                if key in post_fields:
+                    continue
+
             is_relation = rel.__class__.__name__ in EXPORTABLE_RELATIONS
-            is_dependent = (_page.__item_class__.__name__, key) in DEPENDENT_EXPORT
+
+            # determine if the parent object and the related object that we are processing through are related
+            # if this tuple is in the DEPENDENT_EXPORT than we output the full object
+            # else we output the natural key
+            is_dependent = (_page.__item_class__.__name__, rel.__item_class__.__name__) in DEPENDENT_EXPORT
+
             is_blocked = (_page.__item_class__.__name__, key) in DEPENDENT_NONEXPORT
             if is_blocked or not (is_relation or is_dependent):
                 continue
 
-            rel_post_fields = utils.get_post_fields(rel_endpoint, self._cache)
+            # if the rel is of WorkflowApprovalTemplate type, get rel_post_fields from create_approval_template endpoint
+            rel_option_endpoint = rel_endpoint
+            export_key = key
+            if rel.__item_class__.__name__ == 'WorkflowApprovalTemplate':
+                export_key = 'create_approval_template'
+                rel_option_endpoint = _page.related.get('create_approval_template')
+
+            rel_post_fields = utils.get_post_fields(rel_option_endpoint, self._cache)
             if rel_post_fields is None:
                 log.debug("%s is a read-only endpoint.", rel_endpoint)
                 continue
@@ -147,24 +176,28 @@ class ApiV2(base.Base):
                 continue
 
             rel_page = self._cache.get_page(rel_endpoint)
+
             if rel_page is None:
                 continue
 
             if 'results' in rel_page:
                 results = (x.get_natural_key(self._cache) if by_natural_key else self._export(x, rel_post_fields) for x in rel_page.results)
-                related[key] = [x for x in results if x is not None]
+                related[export_key] = [x for x in results if x is not None]
+            elif rel.__item_class__.__name__ == 'WorkflowApprovalTemplate':
+                related[export_key] = self._export(rel_page, rel_post_fields)
             else:
-                related[key] = rel_page.json
+                related[export_key] = rel_page.json
 
         if related:
             fields['related'] = related
 
-        natural_key = _page.get_natural_key(self._cache)
-        if natural_key is None:
-            log.error("Unable to construct a natural key for object %s.", _page.endpoint)
-            self._has_error = True
-            return None
-        fields['natural_key'] = natural_key
+        if _page.__item_class__.__name__ != 'WorkflowApprovalTemplate':
+            natural_key = _page.get_natural_key(self._cache)
+            if natural_key is None:
+                log.error("Unable to construct a natural key for object %s.", _page.endpoint)
+                self._has_error = True
+                return None
+            fields['natural_key'] = natural_key
 
         return utils.remove_encrypted(fields)
 
@@ -181,11 +214,23 @@ class ApiV2(base.Base):
         assets = (self._export(asset, post_fields) for asset in endpoint.results)
         return [asset for asset in assets if asset is not None]
 
+    def _check_for_int(self, value):
+        return isinstance(value, int) or (isinstance(value, str) and value.isdecimal())
+
     def _filtered_list(self, endpoint, value):
-        if isinstance(value, int) or value.isdecimal():
+        if isinstance(value, list) and len(value) == 1:
+            value = value[0]
+        if self._check_for_int(value):
             return endpoint.get(id=int(value))
+
         options = self._cache.get_options(endpoint)
         identifier = next(field for field in options['search_fields'] if field in ('name', 'username', 'hostname'))
+        if isinstance(value, list):
+            if all(self._check_for_int(item) for item in value):
+                identifier = 'or__id'
+            else:
+                identifier = 'or__' + identifier
+
         return endpoint.get(**{identifier: value}, all_pages=True)
 
     def export_assets(self, **kwargs):
@@ -243,7 +288,13 @@ class ApiV2(base.Base):
                         # When creating a project, we need to wait for its
                         # first project update to finish so that associated
                         # JTs have valid options for playbook names
-                        _page.wait_until_completed()
+                        try:
+                            _page.wait_until_completed(timeout=300)
+                        except AssertionError:
+                            # If the project update times out, try to
+                            # carry on in the hopes that it will
+                            # finish before it is needed.
+                            pass
                 else:
                     # If we are an existing project and our scm_tpye is not changing don't try and import the local_path setting
                     if asset['natural_key']['type'] == 'project' and 'local_path' in post_data and _page['scm_type'] == post_data['scm_type']:
@@ -251,9 +302,11 @@ class ApiV2(base.Base):
 
                     _page = _page.put(post_data)
                     changed = True
+            except exc.NoContent:  # desired exception under some circumstances, e.g. labels that already exist
+                pass
             except (exc.Common, AssertionError) as e:
                 identifier = asset.get("name", None) or asset.get("username", None) or asset.get("hostname", None)
-                log.error(f"{endpoint} \"{identifier}\": {e}.")
+                log.error(f'{endpoint} "{identifier}": {e}.')
                 self._has_error = True
                 log.debug("post_data: %r", post_data)
                 continue

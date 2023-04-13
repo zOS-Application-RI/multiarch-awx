@@ -5,9 +5,11 @@ import logging
 
 from django.conf import settings
 from django.apps import apps
-from awx.main.consumers import emit_channel_notification
 
-root_key = 'awx_metrics'
+from awx.main.consumers import emit_channel_notification
+from awx.main.utils import is_testing
+
+root_key = settings.SUBSYSTEM_METRICS_REDIS_KEY_PREFIX
 logger = logging.getLogger('awx.main.analytics')
 
 
@@ -163,10 +165,10 @@ class Metrics:
         Instance = apps.get_model('main', 'Instance')
         if instance_name:
             self.instance_name = instance_name
-        elif settings.IS_TESTING():
+        elif is_testing():
             self.instance_name = "awx_testing"
         else:
-            self.instance_name = Instance.objects.me().hostname
+            self.instance_name = Instance.objects.my_hostname()
 
         # metric name, help_text
         METRICSLIST = [
@@ -184,19 +186,29 @@ class Metrics:
             FloatM('subsystem_metrics_pipe_execute_seconds', 'Time spent saving metrics to redis'),
             IntM('subsystem_metrics_pipe_execute_calls', 'Number of calls to pipe_execute'),
             FloatM('subsystem_metrics_send_metrics_seconds', 'Time spent sending metrics to other nodes'),
-            SetFloatM('task_manager_get_tasks_seconds', 'Time spent in loading all tasks from db'),
+            SetFloatM('task_manager_get_tasks_seconds', 'Time spent in loading tasks from db'),
             SetFloatM('task_manager_start_task_seconds', 'Time spent starting task'),
             SetFloatM('task_manager_process_running_tasks_seconds', 'Time spent processing running tasks'),
             SetFloatM('task_manager_process_pending_tasks_seconds', 'Time spent processing pending tasks'),
-            SetFloatM('task_manager_generate_dependencies_seconds', 'Time spent generating dependencies for pending tasks'),
-            SetFloatM('task_manager_spawn_workflow_graph_jobs_seconds', 'Time spent spawning workflow jobs'),
             SetFloatM('task_manager__schedule_seconds', 'Time spent in running the entire _schedule'),
-            IntM('task_manager_schedule_calls', 'Number of calls to task manager schedule'),
+            IntM('task_manager__schedule_calls', 'Number of calls to _schedule, after lock is acquired'),
             SetFloatM('task_manager_recorded_timestamp', 'Unix timestamp when metrics were last recorded'),
             SetIntM('task_manager_tasks_started', 'Number of tasks started'),
             SetIntM('task_manager_running_processed', 'Number of running tasks processed'),
             SetIntM('task_manager_pending_processed', 'Number of pending tasks processed'),
             SetIntM('task_manager_tasks_blocked', 'Number of tasks blocked from running'),
+            SetFloatM('task_manager_commit_seconds', 'Time spent in db transaction, including on_commit calls'),
+            SetFloatM('dependency_manager_get_tasks_seconds', 'Time spent loading pending tasks from db'),
+            SetFloatM('dependency_manager_generate_dependencies_seconds', 'Time spent generating dependencies for pending tasks'),
+            SetFloatM('dependency_manager__schedule_seconds', 'Time spent in running the entire _schedule'),
+            IntM('dependency_manager__schedule_calls', 'Number of calls to _schedule, after lock is acquired'),
+            SetFloatM('dependency_manager_recorded_timestamp', 'Unix timestamp when metrics were last recorded'),
+            SetIntM('dependency_manager_pending_processed', 'Number of pending tasks processed'),
+            SetFloatM('workflow_manager__schedule_seconds', 'Time spent in running the entire _schedule'),
+            IntM('workflow_manager__schedule_calls', 'Number of calls to _schedule, after lock is acquired'),
+            SetFloatM('workflow_manager_recorded_timestamp', 'Unix timestamp when metrics were last recorded'),
+            SetFloatM('workflow_manager_spawn_workflow_graph_jobs_seconds', 'Time spent spawning workflow tasks'),
+            SetFloatM('workflow_manager_get_tasks_seconds', 'Time spent loading workflow tasks from db'),
         ]
         # turn metric list into dictionary with the metric name as a key
         self.METRICS = {}
@@ -252,13 +264,6 @@ class Metrics:
             data[field] = self.METRICS[field].decode(self.conn)
         return data
 
-    def store_metrics(self, data_json):
-        # called when receiving metrics from other instances
-        data = json.loads(data_json)
-        if self.instance_name != data['instance']:
-            logger.debug(f"{self.instance_name} received subsystem metrics from {data['instance']}")
-        self.conn.set(root_key + "_instance_" + data['instance'], data['metrics'])
-
     def should_pipe_execute(self):
         if self.metrics_have_changed is False:
             return False
@@ -293,17 +298,24 @@ class Metrics:
         try:
             current_time = time.time()
             if current_time - self.previous_send_metrics.decode(self.conn) > self.send_metrics_interval:
+                serialized_metrics = self.serialize_local_metrics()
                 payload = {
                     'instance': self.instance_name,
-                    'metrics': self.serialize_local_metrics(),
+                    'metrics': serialized_metrics,
                 }
-                # store a local copy as well
-                self.store_metrics(json.dumps(payload))
+                # store the serialized data locally as well, so that load_other_metrics will read it
+                self.conn.set(root_key + '_instance_' + self.instance_name, serialized_metrics)
                 emit_channel_notification("metrics", payload)
+
                 self.previous_send_metrics.set(current_time)
                 self.previous_send_metrics.store_value(self.conn)
         finally:
-            lock.release()
+            try:
+                lock.release()
+            except Exception as exc:
+                # After system failures, we might throw redis.exceptions.LockNotOwnedError
+                # this is to avoid print a Traceback, and importantly, avoid raising an exception into parent context
+                logger.warning(f'Error releasing subsystem metrics redis lock, error: {str(exc)}')
 
     def load_other_metrics(self, request):
         # data received from other nodes are stored in their own keys

@@ -1,7 +1,7 @@
 import React from 'react';
 import { t } from '@lingui/macro';
 
-const helpText = {
+const helpText = () => ({
   emailRecepients: t`Use one email address per line to create a recipient list for this type of notification.`,
   emailTimeout: t`The amount of time (in seconds) before the email
           notification stops trying to reach the host and times out. Ranges
@@ -28,7 +28,18 @@ const helpText = {
   twilioDestinationNumbers: t`Use one phone number per line to specify where to
           route SMS messages. Phone numbers should be formatted +11231231234. For more information see Twilio documentation`,
   webhookHeaders: t`Specify HTTP Headers in JSON format. Refer to
-        the Ansible Tower documentation for example syntax.`,
-};
+        the Ansible Controller documentation for example syntax.`,
+  emailOptions: (
+    <>
+      {t`See Django`}{' '}
+      <a
+        href="https://docs.djangoproject.com/en/4.0/ref/settings/#std:setting-EMAIL_USE_TLS"
+        target="_blank"
+        rel="noreferrer"
+      >{t`documentation`}</a>{' '}
+      <span>{t`for more information.`}</span>
+    </>
+  ),
+});
 
 export default helpText;

@@ -3,25 +3,30 @@
 
 from django.urls import re_path
 
-from awx.api.views import (
+from awx.api.views.inventory import (
     InventoryList,
     InventoryDetail,
-    InventoryHostsList,
-    InventoryGroupsList,
-    InventoryRootGroupsList,
-    InventoryVariableData,
-    InventoryScriptView,
-    InventoryTreeView,
-    InventoryInventorySourcesList,
-    InventoryInventorySourcesUpdate,
+    ConstructedInventoryDetail,
+    ConstructedInventoryList,
     InventoryActivityStreamList,
+    InventoryInputInventoriesList,
     InventoryJobTemplateList,
-    InventoryAdHocCommandsList,
     InventoryAccessList,
     InventoryObjectRolesList,
     InventoryInstanceGroupsList,
     InventoryLabelList,
     InventoryCopy,
+)
+from awx.api.views import (
+    InventoryHostsList,
+    InventoryGroupsList,
+    InventoryInventorySourcesList,
+    InventoryInventorySourcesUpdate,
+    InventoryAdHocCommandsList,
+    InventoryRootGroupsList,
+    InventoryScriptView,
+    InventoryTreeView,
+    InventoryVariableData,
 )
 
 
@@ -35,6 +40,7 @@ urls = [
     re_path(r'^(?P<pk>[0-9]+)/script/$', InventoryScriptView.as_view(), name='inventory_script_view'),
     re_path(r'^(?P<pk>[0-9]+)/tree/$', InventoryTreeView.as_view(), name='inventory_tree_view'),
     re_path(r'^(?P<pk>[0-9]+)/inventory_sources/$', InventoryInventorySourcesList.as_view(), name='inventory_inventory_sources_list'),
+    re_path(r'^(?P<pk>[0-9]+)/input_inventories/$', InventoryInputInventoriesList.as_view(), name='inventory_input_inventories'),
     re_path(r'^(?P<pk>[0-9]+)/update_inventory_sources/$', InventoryInventorySourcesUpdate.as_view(), name='inventory_inventory_sources_update'),
     re_path(r'^(?P<pk>[0-9]+)/activity_stream/$', InventoryActivityStreamList.as_view(), name='inventory_activity_stream_list'),
     re_path(r'^(?P<pk>[0-9]+)/job_templates/$', InventoryJobTemplateList.as_view(), name='inventory_job_template_list'),
@@ -46,4 +52,10 @@ urls = [
     re_path(r'^(?P<pk>[0-9]+)/copy/$', InventoryCopy.as_view(), name='inventory_copy'),
 ]
 
-__all__ = ['urls']
+# Constructed inventory special views
+constructed_inventory_urls = [
+    re_path(r'^$', ConstructedInventoryList.as_view(), name='constructed_inventory_list'),
+    re_path(r'^(?P<pk>[0-9]+)/$', ConstructedInventoryDetail.as_view(), name='constructed_inventory_detail'),
+]
+
+__all__ = ['urls', 'constructed_inventory_urls']

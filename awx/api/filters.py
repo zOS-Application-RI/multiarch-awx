@@ -155,12 +155,11 @@ class FieldLookupBackend(BaseFilterBackend):
         'search',
     )
 
-    # A list of fields that we know can be filtered on without the possiblity
+    # A list of fields that we know can be filtered on without the possibility
     # of introducing duplicates
-    NO_DUPLICATES_ALLOW_LIST = (CharField, IntegerField, BooleanField)
+    NO_DUPLICATES_ALLOW_LIST = (CharField, IntegerField, BooleanField, TextField)
 
     def get_fields_from_lookup(self, model, lookup):
-
         if '__' in lookup and lookup.rsplit('__', 1)[-1] in self.SUPPORTED_LOOKUPS:
             path, suffix = lookup.rsplit('__', 1)
         else:
@@ -232,6 +231,9 @@ class FieldLookupBackend(BaseFilterBackend):
                 re.compile(value)
             except re.error as e:
                 raise ValueError(e.args[0])
+        elif new_lookup.endswith('__iexact'):
+            if not isinstance(field, (CharField, TextField)):
+                raise ValueError(f'{field.name} is not a text field and cannot be filtered by case-insensitive search')
         elif new_lookup.endswith('__search'):
             related_model = getattr(field, 'related_model', None)
             if not related_model:
@@ -258,15 +260,15 @@ class FieldLookupBackend(BaseFilterBackend):
             search_filters = {}
             needs_distinct = False
             # Can only have two values: 'AND', 'OR'
-            # If 'AND' is used, an iterm must satisfy all condition to show up in the results.
-            # If 'OR' is used, an item just need to satisfy one condition to appear in results.
+            # If 'AND' is used, an item must satisfy all conditions to show up in the results.
+            # If 'OR' is used, an item just needs to satisfy one condition to appear in results.
             search_filter_relation = 'OR'
             for key, values in request.query_params.lists():
                 if key in self.RESERVED_NAMES:
                     continue
 
                 # HACK: make `created` available via API for the Django User ORM model
-                # so it keep compatiblity with other objects which exposes the `created` attr.
+                # so it keep compatibility with other objects which exposes the `created` attr.
                 if queryset.model._meta.object_name == 'User' and key.startswith('created'):
                     key = key.replace('created', 'date_joined')
 

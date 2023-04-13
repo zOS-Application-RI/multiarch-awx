@@ -37,7 +37,6 @@ __all__ = ['NotificationTemplate', 'Notification']
 
 
 class NotificationTemplate(CommonModelNameNotUnique):
-
     NOTIFICATION_TYPES = [
         ('email', _('Email'), CustomEmailBackend),
         ('slack', _('Slack'), SlackBackend),
@@ -408,6 +407,7 @@ class JobNotificationMixin(object):
  'inventory': 'Stub Inventory',
  'id': 42,
  'hosts': {},
+ 'extra_vars': {},
  'friendly_name': 'Job',
  'finished': False,
  'credential': 'Stub credential',

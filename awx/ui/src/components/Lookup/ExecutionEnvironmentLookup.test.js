@@ -22,7 +22,7 @@ const mockedExecutionEnvironments = {
 const executionEnvironment = {
   id: 42,
   name: 'Bar',
-  image: 'quay.io/ansible/bar',
+  image: 'docker.io/ashish1981/bar',
   pull: 'missing',
 };
 
@@ -66,6 +66,9 @@ describe('ExecutionEnvironmentLookup', () => {
     expect(
       wrapper.find('FormGroup[label="Execution Environment"]').length
     ).toBe(1);
+    expect(wrapper.find('Checkbox[aria-label="Prompt on launch"]').length).toBe(
+      0
+    );
   });
 
   test('should fetch execution environments', async () => {
@@ -131,5 +134,26 @@ describe('ExecutionEnvironmentLookup', () => {
       page: 1,
       page_size: 5,
     });
+  });
+
+  test('should render prompt on launch checkbox when necessary', async () => {
+    await act(async () => {
+      wrapper = mountWithContexts(
+        <Formik>
+          <ExecutionEnvironmentLookup
+            value={executionEnvironment}
+            onChange={() => {}}
+            projectId={12}
+            globallyAvailable
+            isPromptableField
+            promptId="ee-prompt"
+            promptName="ask_execution_environment_on_launch"
+          />
+        </Formik>
+      );
+    });
+    expect(wrapper.find('Checkbox[aria-label="Prompt on launch"]').length).toBe(
+      1
+    );
   });
 });

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Link, useHistory, useRouteMatch } from 'react-router-dom';
 
 import { t } from '@lingui/macro';
-import { Button, Chip } from '@patternfly/react-core';
+import { Button } from '@patternfly/react-core';
 import { OrganizationsAPI } from 'api';
 import { DetailList, Detail, UserDateDetail } from 'components/DetailList';
 import { CardBody, CardActionsRow } from 'components/Card';
@@ -16,6 +16,7 @@ import ErrorDetail from 'components/ErrorDetail';
 import useRequest, { useDismissableError } from 'hooks/useRequest';
 import { useConfig } from 'contexts/Config';
 import ExecutionEnvironmentDetail from 'components/ExecutionEnvironmentDetail';
+import InstanceGroupLabels from 'components/InstanceGroupLabels';
 import { relatedResourceDeleteRequests } from 'util/getRelatedResourceDeleteDetails';
 
 function OrganizationDetail({ organization }) {
@@ -30,7 +31,7 @@ function OrganizationDetail({ organization }) {
     created,
     modified,
     summary_fields,
-    galaxy_credentials,
+    galaxy_credentials = [],
   } = organization;
   const [contentError, setContentError] = useState(null);
   const [hasContentLoading, setHasContentLoading] = useState(true);
@@ -79,11 +80,6 @@ function OrganizationDetail({ organization }) {
     return <ContentError error={contentError} />;
   }
 
-  const buildLinkURL = (instance) =>
-    instance.is_container_group
-      ? '/instance_groups/container_group/'
-      : '/instance_groups/';
-
   return (
     <CardBody>
       <DetailList>
@@ -121,59 +117,41 @@ function OrganizationDetail({ organization }) {
           date={modified}
           user={summary_fields.modified_by}
         />
-        {instanceGroups && instanceGroups.length > 0 && (
+        {instanceGroups && (
           <Detail
             fullWidth
             label={t`Instance Groups`}
             helpText={t`The Instance Groups for this Organization to run on.`}
-            value={
-              <ChipGroup
-                numChips={5}
-                totalChips={instanceGroups.length}
-                ouiaId="instance-group-chips"
-              >
-                {instanceGroups.map((ig) => (
-                  <Link to={`${buildLinkURL(ig)}${ig.id}/details`} key={ig.id}>
-                    <Chip
-                      key={ig.id}
-                      isReadOnly
-                      ouiaId={`instance-group-${ig.id}-chip`}
-                    >
-                      {ig.name}
-                    </Chip>
-                  </Link>
-                ))}
-              </ChipGroup>
-            }
+            value={<InstanceGroupLabels labels={instanceGroups} isLinkable />}
+            isEmpty={instanceGroups.length === 0}
           />
         )}
-        {galaxy_credentials && galaxy_credentials.length > 0 && (
-          <Detail
-            fullWidth
-            label={t`Galaxy Credentials`}
-            value={
-              <ChipGroup
-                numChips={5}
-                totalChips={galaxy_credentials.length}
-                ouiaId="galaxy-credential-chips"
-              >
-                {galaxy_credentials.map((credential) => (
-                  <Link
+        <Detail
+          fullWidth
+          label={t`Galaxy Credentials`}
+          value={
+            <ChipGroup
+              numChips={5}
+              totalChips={galaxy_credentials?.length}
+              ouiaId="galaxy-credential-chips"
+            >
+              {galaxy_credentials?.map((credential) => (
+                <Link
+                  key={credential.id}
+                  to={`/credentials/${credential.id}/details`}
+                >
+                  <CredentialChip
+                    credential={credential}
                     key={credential.id}
-                    to={`/credentials/${credential.id}/details`}
-                  >
-                    <CredentialChip
-                      credential={credential}
-                      key={credential.id}
-                      isReadOnly
-                      ouiaId={`galaxy-credential-${credential.id}-chip`}
-                    />
-                  </Link>
-                ))}
-              </ChipGroup>
-            }
-          />
-        )}
+                    isReadOnly
+                    ouiaId={`galaxy-credential-${credential.id}-chip`}
+                  />
+                </Link>
+              ))}
+            </ChipGroup>
+          }
+          isEmpty={galaxy_credentials?.length === 0}
+        />
       </DetailList>
       <CardActionsRow>
         {summary_fields.user_capabilities.edit && (

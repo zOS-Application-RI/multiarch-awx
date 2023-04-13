@@ -7,6 +7,7 @@ const userProfile = {
   isOrgAdmin: false,
   isNotificationAdmin: false,
   isExecEnvAdmin: false,
+  systemConfig: { SUBSCRIPTION_USAGE_MODEL: 'unique_managed_hosts' },
 };
 
 const filterPaths = (sidebar) => {
@@ -29,6 +30,7 @@ describe('getRouteConfig', () => {
       '/schedules',
       '/activity_stream',
       '/workflow_approvals',
+      '/host_metrics',
       '/templates',
       '/credentials',
       '/projects',
@@ -58,6 +60,7 @@ describe('getRouteConfig', () => {
       '/schedules',
       '/activity_stream',
       '/workflow_approvals',
+      '/host_metrics',
       '/templates',
       '/credentials',
       '/projects',
@@ -127,7 +130,7 @@ describe('getRouteConfig', () => {
       '/teams',
       '/credential_types',
       '/notification_templates',
-      '/instances',
+      '/instance_groups',
       '/applications',
       '/execution_environments',
     ]);
@@ -151,7 +154,7 @@ describe('getRouteConfig', () => {
       '/users',
       '/teams',
       '/credential_types',
-      '/instances',
+      '/instance_groups',
       '/applications',
       '/execution_environments',
     ]);
@@ -175,7 +178,7 @@ describe('getRouteConfig', () => {
       '/users',
       '/teams',
       '/credential_types',
-      '/instances',
+      '/instance_groups',
       '/applications',
       '/execution_environments',
     ]);
@@ -204,7 +207,7 @@ describe('getRouteConfig', () => {
       '/teams',
       '/credential_types',
       '/notification_templates',
-      '/instances',
+      '/instance_groups',
       '/applications',
       '/execution_environments',
     ]);

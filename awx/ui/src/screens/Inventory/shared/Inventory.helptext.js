@@ -19,9 +19,11 @@ const ansibleDocUrls = {
   rhv: 'https://docs.ansible.com/ansible/latest/collections/ovirt/ovirt/ovirt_inventory.html',
   vmware:
     'https://docs.ansible.com/ansible/latest/collections/community/vmware/vmware_vm_inventory_inventory.html',
+  constructed:
+    'https://docs.ansible.com/ansible/latest/collections/ansible/builtin/constructed_inventory.html',
 };
 
-const getInventoryHelpTextStrings = {
+const getInventoryHelpTextStrings = () => ({
   labels: t`Optional labels that describe this inventory,
           such as 'dev' or 'test'. Labels can be used to group and filter
           inventories and completed jobs.`,
@@ -152,6 +154,7 @@ const getInventoryHelpTextStrings = {
   },
   enabledVariableField: t`Retrieve the enabled state from the given dict of host variables.
         The enabled variable may be specified using dot notation, e.g: 'foo.bar'`,
+  sourceControlBranch: t`Branch to use on inventory sync. Project default used if blank. Only allowed if project allow_override field is set to true.`,
   enabledValue: t`This field is ignored unless an Enabled Variable is set. If the enabled variable matches this value, the host will be enabled on import.`,
   hostFilter: t`Regular expression where only matching host names will be imported. The filter is applied as a post-processing step after any inventory plugin filters are applied.`,
   sourceVars: (docsBaseUrl, source) => {
@@ -188,9 +191,50 @@ const getInventoryHelpTextStrings = {
       </>
     );
   },
+  constructedInventorySourceVars: () => {
+    const yamlExample = `
+      ---
+      plugin: constructed
+      strict: true
+      use_vars_plugins: true
+    `;
+    return (
+      <>
+        <Trans>
+          Variables used to configure the constructed inventory plugin. For a
+          detailed description of how to configure this plugin, see{' '}
+          <a
+            href={ansibleDocUrls.constructed}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            constructed inventory
+          </a>{' '}
+          plugin configuration guide.
+        </Trans>
+        <br />
+        <br />
+        <hr />
+        <br />
+        <Trans>
+          Variables must be in JSON or YAML syntax. Use the radio button to
+          toggle between the two.
+        </Trans>
+        <br />
+        <br />
+        <Trans>YAML:</Trans>
+        <pre>{yamlExample}</pre>
+      </>
+    );
+  },
   sourcePath: t`The inventory file
           to be synced by this source. You can select from
           the dropdown or enter a file within the input.`,
-};
+  preventInstanceGroupFallback: t`If enabled, the inventory will prevent adding any organization instance groups to the list of preferred instances groups to run associated job templates on.
+          Note: If this setting is enabled and you provided an empty list, the global instance groups will be applied.`,
+  enabledOptions: (
+    <p>{t`Prevent Instance Group Fallback: If enabled, the inventory will prevent adding any organization instance groups to the list of preferred instances groups to run associated job templates on.`}</p>
+  ),
+});
 
 export default getInventoryHelpTextStrings;

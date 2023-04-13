@@ -116,6 +116,11 @@ options:
         - Project the role acts on.
       type: list
       elements: str
+    instance_groups:
+      description:
+        - Instance Group the role acts on.
+      type: list
+      elements: str
     state:
       description:
         - Desired state.
@@ -193,6 +198,7 @@ def main():
         lookup_organization=dict(),
         project=dict(),
         projects=dict(type='list', elements='str'),
+        instance_groups=dict(type='list', elements='str'),
         state=dict(choices=['present', 'absent'], default='present'),
     )
 
@@ -241,6 +247,7 @@ def main():
     # Lookup actor data
     # separate actors from resources
     actor_data = {}
+    missing_items = []
     for key in ('user', 'team'):
         if key in resources:
             if key == 'user':
@@ -248,9 +255,14 @@ def main():
             else:
                 lookup_data_populated = lookup_data
             # Attempt to look up project based on the provided name or ID and lookup data
-            actor_data[key] = module.get_one('{0}s'.format(key), name_or_id=resources[key], data=lookup_data_populated)
-            resources.pop(key)
-
+            data = module.get_one('{0}s'.format(key), name_or_id=resources[key], data=lookup_data_populated)
+            if data is None:
+                module.fail_json(
+                    msg='Unable to find {0} with name: {1}'.format(key, resources[key]), changed=False
+                )
+            else:
+                actor_data[key] = module.get_one('{0}s'.format(key), name_or_id=resources[key], data=lookup_data_populated)
+                resources.pop(key)
     # Lookup Resources
     resource_data = {}
     for key, value in resources.items():
@@ -261,9 +273,15 @@ def main():
                     lookup_data_populated = {}
                 else:
                     lookup_data_populated = lookup_data
-
-            resource_data.setdefault(key, []).append(module.get_one(key, name_or_id=resource, data=lookup_data_populated))
-
+            data = module.get_one(key, name_or_id=resource, data=lookup_data_populated)
+            if data is None:
+                missing_items.append(resource)
+            else:
+                resource_data.setdefault(key, []).append(data)
+    if len(missing_items) > 0:
+        module.fail_json(
+            msg='There were {0} missing items, missing items: {1}'.format(len(missing_items), missing_items), changed=False
+        )
     # build association agenda
     associations = {}
     for actor_type, actor in actor_data.items():

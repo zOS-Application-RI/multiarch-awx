@@ -9,7 +9,6 @@ from . import page
 
 
 class WorkflowJobTemplateNode(HasCreate, base.Base):
-
     dependencies = [WorkflowJobTemplate, UnifiedJobTemplate]
     NATURAL_KEY = ('workflow_job_template', 'identifier')
 
@@ -32,6 +31,11 @@ class WorkflowJobTemplateNode(HasCreate, base.Base):
             'extra_data',
             'identifier',
             'all_parents_must_converge',
+            # prompt fields for JTs
+            'job_slice_count',
+            'forks',
+            'timeout',
+            'execution_environment',
         )
 
         update_payload(payload, optional_fields, kwargs)
@@ -92,6 +96,14 @@ class WorkflowJobTemplateNode(HasCreate, base.Base):
         candidates = workflow_job.get_related('workflow_nodes', identifier=self.identifier)
         return candidates.results.pop()
 
+    def add_label(self, label):
+        with suppress(exc.NoContent):
+            self.related.labels.post(dict(id=label.id))
+
+    def add_instance_group(self, instance_group):
+        with suppress(exc.NoContent):
+            self.related.instance_groups.post(dict(id=instance_group.id))
+
 
 page.register_page(
     [resources.workflow_job_template_node, (resources.workflow_job_template_nodes, 'post'), (resources.workflow_job_template_workflow_nodes, 'post')],
@@ -100,7 +112,6 @@ page.register_page(
 
 
 class WorkflowJobTemplateNodes(page.PageList, WorkflowJobTemplateNode):
-
     pass
 
 

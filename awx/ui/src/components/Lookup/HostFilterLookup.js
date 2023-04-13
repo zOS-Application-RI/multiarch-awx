@@ -84,6 +84,7 @@ const QS_CONFIG = getQSConfig(
     page: 1,
     page_size: 5,
     order_by: 'name',
+    not__inventory__kind: 'constructed',
   },
   ['id', 'page', 'page_size', 'inventory']
 );
@@ -349,7 +350,7 @@ function HostFilterLookup({
           content={t`Populate the hosts for this inventory by using a search
               filter. Example: ansible_facts__ansible_distribution:"RedHat".
               Refer to the documentation for further syntax and
-              examples.  Refer to the Ansible Tower documentation for further syntax and
+              examples.  Refer to the Ansible Controller documentation for further syntax and
               examples.`}
         />
       }

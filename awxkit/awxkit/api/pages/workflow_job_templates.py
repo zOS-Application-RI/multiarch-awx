@@ -12,7 +12,6 @@ from . import page
 
 
 class WorkflowJobTemplate(HasCopy, HasCreate, HasNotifications, HasSurvey, UnifiedJobTemplate):
-
     optional_dependencies = [Organization]
     NATURAL_KEY = ('organization', 'name')
 
@@ -42,6 +41,9 @@ class WorkflowJobTemplate(HasCopy, HasCreate, HasNotifications, HasSurvey, Unifi
             "ask_inventory_on_launch",
             "ask_scm_branch_on_launch",
             "ask_limit_on_launch",
+            "ask_labels_on_launch",
+            "ask_skip_tags_on_launch",
+            "ask_tags_on_launch",
             "limit",
             "scm_branch",
             "survey_enabled",
@@ -97,7 +99,6 @@ page.register_page(
 
 
 class WorkflowJobTemplates(page.PageList, WorkflowJobTemplate):
-
     pass
 
 
@@ -105,7 +106,6 @@ page.register_page([resources.workflow_job_templates, resources.related_workflow
 
 
 class WorkflowJobTemplateLaunch(base.Base):
-
     pass
 
 
@@ -113,7 +113,6 @@ page.register_page(resources.workflow_job_template_launch, WorkflowJobTemplateLa
 
 
 class WorkflowJobTemplateCopy(base.Base):
-
     pass
 
 

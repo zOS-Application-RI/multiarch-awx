@@ -15,6 +15,7 @@ def aws(cred, env, private_data_dir):
 
     if cred.has_input('security_token'):
         env['AWS_SECURITY_TOKEN'] = cred.get_input('security_token', default='')
+        env['AWS_SESSION_TOKEN'] = env['AWS_SECURITY_TOKEN']
 
 
 def gce(cred, env, private_data_dir):
@@ -35,6 +36,7 @@ def gce(cred, env, private_data_dir):
     container_path = to_container_path(path, private_data_dir)
     env['GCE_CREDENTIALS_FILE_PATH'] = container_path
     env['GCP_SERVICE_ACCOUNT_FILE'] = container_path
+    env['GOOGLE_APPLICATION_CREDENTIALS'] = container_path
 
     # Handle env variables for new module types.
     # This includes gcp_compute inventory plugin and

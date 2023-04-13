@@ -11,15 +11,12 @@ from django.http import HttpResponse
 from django.views.generic import View
 from django.views.generic.base import RedirectView
 from django.utils.encoding import smart_str
-from awx.api.serializers import UserSerializer
-from rest_framework.renderers import JSONRenderer
 from django.conf import settings
 
 logger = logging.getLogger('awx.sso.views')
 
 
 class BaseRedirectView(RedirectView):
-
     permanent = True
 
     def get_redirect_url(self, *args, **kwargs):
@@ -42,10 +39,6 @@ class CompleteView(BaseRedirectView):
         if self.request.user and self.request.user.is_authenticated:
             logger.info(smart_str(u"User {} logged in".format(self.request.user.username)))
             response.set_cookie('userLoggedIn', 'true')
-            current_user = UserSerializer(self.request.user)
-            current_user = smart_str(JSONRenderer().render(current_user.data))
-            current_user = urllib.parse.quote('%s' % current_user, '')
-            response.set_cookie('current_user', current_user, secure=settings.SESSION_COOKIE_SECURE or None)
             response.setdefault('X-API-Session-Cookie-Name', getattr(settings, 'SESSION_COOKIE_NAME', 'awx_sessionid'))
         return response
 

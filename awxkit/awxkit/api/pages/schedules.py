@@ -1,6 +1,7 @@
 from contextlib import suppress
 
-from awxkit.api.pages import SystemJobTemplate
+from awxkit.api.pages import JobTemplate, SystemJobTemplate, Project, InventorySource
+from awxkit.api.pages.workflow_job_templates import WorkflowJobTemplate
 from awxkit.api.mixins import HasCreate
 from awxkit.api.resources import resources
 from awxkit.config import config
@@ -11,17 +12,19 @@ from . import base
 
 
 class Schedule(HasCreate, base.Base):
-    dependencies = [SystemJobTemplate]
+    dependencies = [JobTemplate, SystemJobTemplate, Project, InventorySource, WorkflowJobTemplate]
     NATURAL_KEY = ('unified_job_template', 'name')
 
     def silent_delete(self):
-        """If we are told to prevent_teardown of schedules, then keep them
-        but do not leave them activated, or system will be swamped quickly"""
+        """
+        In every case, we start by disabling the schedule
+        to avoid cascading errors from a cleanup failure.
+        Then, if we are told to prevent_teardown of schedules, we keep them
+        """
         try:
+            self.patch(enabled=False)
             if not config.prevent_teardown:
                 return self.delete()
-            else:
-                self.patch(enabled=False)
         except (exc.NoContent, exc.NotFound, exc.Forbidden):
             pass
 
@@ -45,12 +48,19 @@ class Schedules(page.PageList, Schedule):
         with suppress(exc.NoContent):
             self.related.credentials.post(dict(id=cred.id, disassociate=True))
 
+    def add_label(self, label):
+        with suppress(exc.NoContent):
+            self.related.labels.post(dict(id=label.id))
+
+    def add_instance_group(self, instance_group):
+        with suppress(exc.NoContent):
+            self.related.instance_groups.post(dict(id=instance_group.id))
+
 
 page.register_page([resources.schedules, resources.related_schedules], Schedules)
 
 
 class SchedulesPreview(base.Base):
-
     pass
 
 
