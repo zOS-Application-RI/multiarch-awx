@@ -138,6 +138,7 @@ RUN rm -rf /root/.cache && rm -rf /tmp/*
 {% if (build_dev|bool) or (kube_dev|bool) %}
 # Install development/test requirements
 RUN dnf -y install \
+    cargo \
     crun \
     gdb \
     gtk3 \
