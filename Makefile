@@ -25,7 +25,8 @@ COLLECTION_INSTALL = ~/.ansible/collections/ansible_collections/$(COLLECTION_NAM
 COLLECTION_TEMPLATE_VERSION ?= false
 
 # NOTE: This defaults the container image version to the branch that's active
-COMPOSE_TAG ?= $(GIT_BRANCH)
+# COMPOSE_TAG ?= $(GIT_BRANCH)
+COMPOSE_TAG ?= latest
 MAIN_NODE_TYPE ?= hybrid
 # If set to true docker-compose will also start a keycloak instance
 KEYCLOAK ?= false
@@ -40,8 +41,9 @@ GRAFANA ?= false
 
 VENV_BASE ?= /var/lib/awx/venv
 
-DEV_DOCKER_TAG_BASE ?= ghcr.io/ansible
-DEVEL_IMAGE_NAME ?= $(DEV_DOCKER_TAG_BASE)/awx_devel:$(COMPOSE_TAG)
+DEV_DOCKER_TAG_BASE ?= docker.io/ashish1981
+# DEVEL_IMAGE_NAME ?= $(DEV_DOCKER_TAG_BASE)/awx_devel:$(COMPOSE_TAG)
+DEVEL_IMAGE_NAME ?= $(DEV_DOCKER_TAG_BASE)/awx:$(COMPOSE_TAG)
 
 RECEPTOR_IMAGE ?= docker.io/ashish1981/receptor:latest
 
