@@ -131,9 +131,8 @@ describe('<InventoryDetail />', () => {
     expect(InventoriesAPI.readInstanceGroups).toHaveBeenCalledWith(
       mockInventory.id
     );
-    const chip = wrapper.find('Chip').at(0);
-    expect(chip.prop('isReadOnly')).toEqual(true);
-    expect(chip.prop('children')).toEqual('Foo');
+    const label = wrapper.find('Label').at(0);
+    expect(label.prop('children')).toEqual('Foo');
   });
 
   test('should not load instance groups', async () => {
@@ -153,6 +152,9 @@ describe('<InventoryDetail />', () => {
     expect(InventoriesAPI.readInstanceGroups).toHaveBeenCalledWith(
       mockInventory.id
     );
-    expect(wrapper.find(`Detail[label="Instance Groups"]`)).toHaveLength(0);
+    const instance_groups_detail = wrapper
+      .find(`Detail[label="Instance Groups"]`)
+      .at(0);
+    expect(instance_groups_detail.prop('isEmpty')).toEqual(true);
   });
 });

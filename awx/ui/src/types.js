@@ -145,6 +145,7 @@ export const Project = shape({
   summary_fields: shape({
     organization: Organization,
     credential: Credential,
+    signature_validation_credential: Credential,
     last_job: shape({}),
     last_update: shape({}),
     created_by: shape({}),
@@ -163,6 +164,7 @@ export const Project = shape({
   scm_delete_on_update: bool,
   scm_track_submodules: bool,
   credential: number,
+  signature_validation_credential: number,
   status: oneOf([
     'new',
     'pending',
@@ -436,4 +438,13 @@ export const Toast = shape({
   id: oneOfType([string, number]).isRequired,
   hasTimeout: bool,
   message: string,
+});
+
+export const HostMetrics = shape({
+  hostname: string.isRequired,
+  first_automation: string.isRequired,
+  last_automation: string.isRequired,
+  automated_counter: number.isRequired,
+  used_in_inventories: number,
+  deleted_counter: number,
 });

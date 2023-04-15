@@ -10,7 +10,7 @@ import {
   InfiniteLoader,
   List,
 } from 'react-virtualized';
-import { Button } from '@patternfly/react-core';
+import { Button, Alert } from '@patternfly/react-core';
 
 import AlertModal from 'components/AlertModal';
 import { CardBody as _CardBody } from 'components/Card';
@@ -99,6 +99,7 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
   const scrollHeight = useRef(0);
   const history = useHistory();
   const eventByUuidRequests = useRef([]);
+  const eventsProcessedDelay = useRef(250);
 
   const fetchEventByUuid = async (uuid) => {
     let promise = eventByUuidRequests.current[uuid];
@@ -156,6 +157,7 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
   );
   const [isMonitoringWebsocket, setIsMonitoringWebsocket] = useState(false);
   const [lastScrollPosition, setLastScrollPosition] = useState(0);
+  const [showEventsRefresh, setShowEventsRefresh] = useState(false);
 
   useEffect(() => {
     if (!isTreeReady || !onReadyEvents.length) {
@@ -163,6 +165,11 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
     }
     addEvents(onReadyEvents);
     setOnReadyEvents([]);
+    if (isFollowModeEnabled) {
+      setTimeout(() => {
+        scrollToEnd();
+      }, 0);
+    }
   }, [isTreeReady, onReadyEvents]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalNonCollapsedRows = Math.max(
@@ -180,6 +187,9 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
   useEffect(() => {
     const pendingRequests = Object.values(eventByUuidRequests.current || {});
     setHasContentLoading(true); // prevents "no content found" screen from flashing
+    if (location.search) {
+      setIsFollowModeEnabled(false);
+    }
     Promise.allSettled(pendingRequests).then(() => {
       setRemoteRowCount(0);
       clearLoadedEvents();
@@ -188,61 +198,81 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
   }, [location.search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!isJobRunning(jobStatus)) {
-      setIsFollowModeEnabled(false);
-    }
     rebuildEventsTree();
   }, [isFlatMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const pollForEventsProcessed = useCallback(async () => {
+    const {
+      data: { event_processing_finished },
+    } = await getJobModel(job.type).readDetail(job.id);
+    if (event_processing_finished) {
+      setShowEventsRefresh(true);
+      return;
+    }
+    const fiveMinutes = 1000 * 60 * 5;
+    if (eventsProcessedDelay.current >= fiveMinutes) {
+      return;
+    }
+    setTimeout(pollForEventsProcessed, eventsProcessedDelay.current);
+    eventsProcessedDelay.current *= 2;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job.id, job.type, lastScrollPosition]);
+
   useEffect(() => {
     if (!isJobRunning(jobStatus)) {
-      setTimeout(() => {
-        loadJobEvents().then(() => {
-          setWsEvents([]);
-          scrollToRow(lastScrollPosition);
-        });
-      }, 500);
+      if (wsEvents.length) {
+        pollForEventsProcessed();
+      }
       return;
     }
     let batchTimeout;
     let batchedEvents = [];
-    connectJobSocket(job, (data) => {
-      const addBatchedEvents = () => {
-        let min;
-        let max;
-        let newCssMap;
-        batchedEvents.forEach((event) => {
-          if (!min || event.counter < min) {
-            min = event.counter;
-          }
-          if (!max || event.counter > max) {
-            max = event.counter;
-          }
-          const { lineCssMap } = getLineTextHtml(event);
-          newCssMap = {
-            ...newCssMap,
-            ...lineCssMap,
-          };
-        });
-        setWsEvents((oldWsEvents) => {
-          const updated = oldWsEvents.concat(batchedEvents);
-          jobSocketCounter.current = updated.length;
-          return updated.sort((a, b) => a.counter - b.counter);
-        });
-        setCssMap((prevCssMap) => ({
-          ...prevCssMap,
-          ...newCssMap,
-        }));
-        if (max > jobSocketCounter.current) {
-          jobSocketCounter.current = max;
+    const addBatchedEvents = () => {
+      let min;
+      let max;
+      let newCssMap;
+      batchedEvents.forEach((event) => {
+        if (!min || event.counter < min) {
+          min = event.counter;
         }
-        batchedEvents = [];
-      };
+        if (!max || event.counter > max) {
+          max = event.counter;
+        }
+        const { lineCssMap } = getLineTextHtml(event);
+        newCssMap = {
+          ...newCssMap,
+          ...lineCssMap,
+        };
+      });
+      setWsEvents((oldWsEvents) => {
+        const newEvents = [];
+        batchedEvents.forEach((event) => {
+          if (!oldWsEvents.find((e) => e.id === event.id)) {
+            newEvents.push(event);
+          }
+        });
+        const updated = oldWsEvents.concat(newEvents);
+        jobSocketCounter.current = updated.length;
+        if (!oldWsEvents.length && min > remoteRowCount + 1) {
+          loadJobEvents(min);
+        }
+        return updated.sort((a, b) => a.counter - b.counter);
+      });
+      setCssMap((prevCssMap) => ({
+        ...prevCssMap,
+        ...newCssMap,
+      }));
+      if (max > jobSocketCounter.current) {
+        jobSocketCounter.current = max;
+      }
+      batchedEvents = [];
+    };
 
+    connectJobSocket(job, (data) => {
       if (data.group_name === `${job.type}_events`) {
         batchedEvents.push(data);
         clearTimeout(batchTimeout);
-        if (batchedEvents.length >= 25) {
+        if (batchedEvents.length >= 10) {
           addBatchedEvents();
         } else {
           batchTimeout = setTimeout(addBatchedEvents, 500);
@@ -266,7 +296,14 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
       setIsMonitoringWebsocket(false);
       isMounted.current = false;
     };
-  }, [isJobRunning(jobStatus)]); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isJobRunning(jobStatus), pollForEventsProcessed]);
+
+  useEffect(() => {
+    if (isFollowModeEnabled) {
+      scrollToEnd();
+    }
+  }, [wsEvents.length, isFollowModeEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (listRef.current?.recomputeRowHeights) {
@@ -326,7 +363,7 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
     }
   };
 
-  const loadJobEvents = async () => {
+  const loadJobEvents = async (firstWsCounter = null) => {
     const [params, loadRange] = getEventRequestParams(job, 50, [1, 50]);
 
     if (isMounted.current) {
@@ -338,6 +375,9 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
 
     if (isFlatMode) {
       params.not__stdout = '';
+    }
+    if (firstWsCounter) {
+      params.counter__lt = firstWsCounter;
     }
     const qsParams = parseQueryString(QS_CONFIG, location.search);
     const eventPromise = getJobModel(job.type).readEvents(job.id, {
@@ -403,7 +443,7 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
     if (getEvent(counter)) {
       return true;
     }
-    if (index > remoteRowCount && index < remoteRowCount + wsEvents.length) {
+    if (index >= remoteRowCount && index < remoteRowCount + wsEvents.length) {
       return true;
     }
     return currentlyLoading.includes(counter);
@@ -419,9 +459,6 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
   };
 
   const rowRenderer = ({ index, parent, key, style }) => {
-    if (listRef.current && isFollowModeEnabled) {
-      setTimeout(() => scrollToRow(remoteRowCount - 1), 0);
-    }
     let event;
     let node;
     try {
@@ -433,7 +470,7 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
     }
     if (
       !event &&
-      index > remoteRowCount &&
+      index >= remoteRowCount &&
       index < remoteRowCount + wsEvents.length
     ) {
       event = wsEvents[index - remoteRowCount];
@@ -568,6 +605,9 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
     loadRange.forEach((n) => {
       cache.clear(n);
     });
+    if (isFollowModeEnabled) {
+      scrollToEnd();
+    }
   };
 
   const scrollToRow = (rowIndex) => {
@@ -580,14 +620,16 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
   const handleScrollPrevious = () => {
     const startIndex = listRef.current.Grid._renderedRowStartIndex;
     const stopIndex = listRef.current.Grid._renderedRowStopIndex;
-    const scrollRange = stopIndex - startIndex + 1;
+    const scrollRange = stopIndex - startIndex;
     scrollToRow(Math.max(0, startIndex - scrollRange));
     setIsFollowModeEnabled(false);
   };
 
   const handleScrollNext = () => {
+    const startIndex = listRef.current.Grid._renderedRowStartIndex;
     const stopIndex = listRef.current.Grid._renderedRowStopIndex;
-    scrollToRow(stopIndex - 1);
+    const scrollRange = stopIndex - startIndex;
+    scrollToRow(stopIndex + scrollRange);
   };
 
   const handleScrollFirst = () => {
@@ -595,8 +637,18 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
     setIsFollowModeEnabled(false);
   };
 
+  const scrollToEnd = useCallback(() => {
+    scrollToRow(-1);
+    let timeout;
+    if (isFollowModeEnabled) {
+      setTimeout(() => scrollToRow(-1), 100);
+    }
+    return () => clearTimeout(timeout);
+  }, [isFollowModeEnabled]);
+
   const handleScrollLast = () => {
-    scrollToRow(totalNonCollapsedRows + wsEvents.length);
+    scrollToEnd();
+    setIsFollowModeEnabled(true);
   };
 
   const handleResize = ({ width }) => {
@@ -619,6 +671,9 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
     }
     scrollTop.current = e.scrollTop;
     scrollHeight.current = e.scrollHeight;
+    if (e.scrollTop + e.clientHeight >= e.scrollHeight) {
+      setIsFollowModeEnabled(true);
+    }
   };
 
   const handleExpandCollapseAll = () => {
@@ -658,11 +713,30 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
           job={job}
           eventRelatedSearchableKeys={eventRelatedSearchableKeys}
           eventSearchableKeys={eventSearchableKeys}
-          remoteRowCount={remoteRowCount}
-          scrollToRow={scrollToRow}
+          scrollToEnd={scrollToEnd}
           isFollowModeEnabled={isFollowModeEnabled}
           setIsFollowModeEnabled={setIsFollowModeEnabled}
         />
+        {showEventsRefresh ? (
+          <Alert
+            variant="default"
+            title={
+              <>
+                {t`Events processing complete.`}{' '}
+                <Button
+                  variant="link"
+                  isInline
+                  onClick={() => {
+                    loadJobEvents().then(() => {
+                      setWsEvents([]);
+                    });
+                    setShowEventsRefresh(false);
+                  }}
+                >{t`Reload output`}</Button>
+              </>
+            }
+          />
+        ) : null}
         <PageControls
           onScrollFirst={handleScrollFirst}
           onScrollLast={handleScrollLast}
@@ -687,6 +761,7 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
               ) {
                 return (
                   <EmptyOutput
+                    job={job}
                     hasQueryParams={location.search.length > 1}
                     isJobRunning={isJobRunning(jobStatus)}
                     onUnmount={() => {
@@ -717,7 +792,6 @@ function JobOutput({ job, eventRelatedSearchableKeys, eventSearchableKeys }) {
                           rowCount={totalNonCollapsedRows + wsEvents.length}
                           rowHeight={cache.rowHeight}
                           rowRenderer={rowRenderer}
-                          scrollToAlignment="start"
                           width={width || 1}
                           overscanRowCount={20}
                           onScroll={handleScroll}

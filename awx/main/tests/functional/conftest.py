@@ -347,9 +347,7 @@ def scm_inventory_source(inventory, project):
         source_project=project,
         source='scm',
         source_path='inventory_file',
-        update_on_project_update=True,
         inventory=inventory,
-        scm_last_revision=project.scm_revision,
     )
     with mock.patch('awx.main.models.unified_jobs.UnifiedJobTemplate.update'):
         inv_src.save()
@@ -511,6 +509,14 @@ def hosts(group_factory):
 @pytest.fixture
 def group(inventory):
     return inventory.groups.create(name='single-group')
+
+
+@pytest.fixture
+def constructed_inventory(organization):
+    """
+    creates a new constructed inventory source
+    """
+    return Inventory.objects.create(name='dummy1', kind='constructed', organization=organization)
 
 
 @pytest.fixture
@@ -708,7 +714,7 @@ def jt_linked(organization, project, inventory, machine_credential, credential, 
 
 @pytest.fixture
 def workflow_job_template(organization):
-    wjt = WorkflowJobTemplate(name='test-workflow_job_template', organization=organization)
+    wjt = WorkflowJobTemplate.objects.create(name='test-workflow_job_template', organization=organization)
     wjt.save()
 
     return wjt
@@ -735,6 +741,30 @@ def system_job_factory(system_job_template, admin):
         return system_job_template.create_unified_job(_eager_fields={'status': initial_state, 'created_by': created_by})
 
     return factory
+
+
+@pytest.fixture
+def wfjt(workflow_job_template_factory, organization):
+    objects = workflow_job_template_factory('test_workflow', organization=organization, persisted=True)
+    return objects.workflow_job_template
+
+
+@pytest.fixture
+def wfjt_with_nodes(workflow_job_template_factory, organization, job_template):
+    objects = workflow_job_template_factory(
+        'test_workflow', organization=organization, workflow_job_template_nodes=[{'unified_job_template': job_template}], persisted=True
+    )
+    return objects.workflow_job_template
+
+
+@pytest.fixture
+def wfjt_node(wfjt_with_nodes):
+    return wfjt_with_nodes.workflow_job_template_nodes.all()[0]
+
+
+@pytest.fixture
+def workflow_job(wfjt):
+    return wfjt.workflow_jobs.create(name='test_workflow')
 
 
 def dumps(value):

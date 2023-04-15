@@ -79,6 +79,11 @@ class HostManager(models.Manager):
         return qs
 
 
+class HostMetricActiveManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(deleted=False)
+
+
 def get_ig_ig_mapping(ig_instance_mapping, instance_ig_mapping):
     # Create IG mapping by union of all groups their instances are members of
     ig_ig_mapping = {}
@@ -99,9 +104,12 @@ class InstanceManager(models.Manager):
     instance or role.
     """
 
+    def my_hostname(self):
+        return settings.CLUSTER_HOST_ID
+
     def me(self):
         """Return the currently active instance."""
-        node = self.filter(hostname=settings.CLUSTER_HOST_ID)
+        node = self.filter(hostname=self.my_hostname())
         if node.exists():
             return node[0]
         raise RuntimeError("No instance found with the current cluster host id")
@@ -129,10 +137,13 @@ class InstanceManager(models.Manager):
                 # if instance was not retrieved by uuid and hostname was, use the hostname
                 instance = self.filter(hostname=hostname)
 
+            from awx.main.models import Instance
+
             # Return existing instance
             if instance.exists():
                 instance = instance.first()  # in the unusual occasion that there is more than one, only get one
-                update_fields = []
+                instance.node_state = Instance.States.INSTALLED  # Wait for it to show up on the mesh
+                update_fields = ['node_state']
                 # if instance was retrieved by uuid and hostname has changed, update hostname
                 if instance.hostname != hostname:
                     logger.warning("passed in hostname {0} is different from the original hostname {1}, updating to {0}".format(hostname, instance.hostname))
@@ -141,6 +152,7 @@ class InstanceManager(models.Manager):
                 # if any other fields are to be updated
                 if instance.ip_address != ip_address:
                     instance.ip_address = ip_address
+                    update_fields.append('ip_address')
                 if instance.node_type != node_type:
                     instance.node_type = node_type
                     update_fields.append('node_type')
@@ -151,12 +163,16 @@ class InstanceManager(models.Manager):
                     return (False, instance)
 
             # Create new instance, and fill in default values
-            create_defaults = dict(capacity=0)
+            create_defaults = {
+                'node_state': Instance.States.INSTALLED,
+                'capacity': 0,
+                'listener_port': 27199,
+            }
             if defaults is not None:
                 create_defaults.update(defaults)
             uuid_option = {}
             if uuid is not None:
-                uuid_option = dict(uuid=uuid)
+                uuid_option = {'uuid': uuid}
             if node_type == 'execution' and 'version' not in create_defaults:
                 create_defaults['version'] = RECEPTOR_PENDING
             instance = self.create(hostname=hostname, ip_address=ip_address, node_type=node_type, **create_defaults, **uuid_option)

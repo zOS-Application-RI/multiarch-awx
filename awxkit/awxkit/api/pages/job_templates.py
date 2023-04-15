@@ -11,7 +11,6 @@ from . import page
 
 
 class JobTemplate(HasCopy, HasCreate, HasInstanceGroups, HasNotifications, HasSurvey, UnifiedJobTemplate):
-
     optional_dependencies = [Inventory, Credential, Project]
     NATURAL_KEY = ('organization', 'name')
 
@@ -54,6 +53,12 @@ class JobTemplate(HasCopy, HasCreate, HasInstanceGroups, HasNotifications, HasSu
             'ask_tags_on_launch',
             'ask_variables_on_launch',
             'ask_verbosity_on_launch',
+            'ask_execution_environment_on_launch',
+            'ask_labels_on_launch',
+            'ask_forks_on_launch',
+            'ask_job_slice_count_on_launch',
+            'ask_timeout_on_launch',
+            'ask_instance_groups_on_launch',
             'allow_simultaneous',
             'become_enabled',
             'diff_mode',
@@ -73,6 +78,7 @@ class JobTemplate(HasCopy, HasCreate, HasInstanceGroups, HasNotifications, HasSu
             'webhook_service',
             'webhook_credential',
             'scm_branch',
+            'prevent_instance_group_fallback',
         )
 
         update_payload(payload, optional_fields, kwargs)
@@ -146,7 +152,6 @@ page.register_page([resources.job_template, (resources.job_templates, 'post'), (
 
 
 class JobTemplates(page.PageList, JobTemplate):
-
     pass
 
 
@@ -154,7 +159,6 @@ page.register_page([resources.job_templates, resources.related_job_templates], J
 
 
 class JobTemplateCallback(base.Base):
-
     pass
 
 
@@ -162,7 +166,6 @@ page.register_page(resources.job_template_callback, JobTemplateCallback)
 
 
 class JobTemplateLaunch(base.Base):
-
     pass
 
 
@@ -170,7 +173,6 @@ page.register_page(resources.job_template_launch, JobTemplateLaunch)
 
 
 class JobTemplateCopy(base.Base):
-
     pass
 
 

@@ -282,7 +282,7 @@ class Credential(PasswordFieldsModel, CommonModelNameNotUnique, ResourceMixin):
                         return field['default']
                 if 'default' in kwargs:
                     return kwargs['default']
-                raise AttributeError
+                raise AttributeError(field_name)
         if field_name in self.inputs:
             return self.inputs[field_name]
         if 'default' in kwargs:
@@ -336,6 +336,7 @@ class CredentialType(CommonModelNameNotUnique):
         ('external', _('External')),
         ('kubernetes', _('Kubernetes')),
         ('galaxy', _('Galaxy/Automation Hub')),
+        ('cryptography', _('Cryptography')),
     )
 
     kind = models.CharField(max_length=32, choices=KIND_CHOICES)
@@ -527,9 +528,13 @@ class CredentialType(CommonModelNameNotUnique):
 
         if 'INVENTORY_UPDATE_ID' not in env:
             # awx-manage inventory_update does not support extra_vars via -e
-            extra_vars = {}
-            for var_name, tmpl in self.injectors.get('extra_vars', {}).items():
-                extra_vars[var_name] = sandbox_env.from_string(tmpl).render(**namespace)
+            def build_extra_vars(node):
+                if isinstance(node, dict):
+                    return {build_extra_vars(k): build_extra_vars(v) for k, v in node.items()}
+                elif isinstance(node, list):
+                    return [build_extra_vars(x) for x in node]
+                else:
+                    return sandbox_env.from_string(node).render(**namespace)
 
             def build_extra_vars_file(vars, private_dir):
                 handle, path = tempfile.mkstemp(dir=os.path.join(private_dir, 'env'))
@@ -539,6 +544,7 @@ class CredentialType(CommonModelNameNotUnique):
                 os.chmod(path, stat.S_IRUSR)
                 return path
 
+            extra_vars = build_extra_vars(self.injectors.get('extra_vars', {}))
             if extra_vars:
                 path = build_extra_vars_file(extra_vars, private_data_dir)
                 container_path = to_container_path(path, private_data_dir)
@@ -546,7 +552,6 @@ class CredentialType(CommonModelNameNotUnique):
 
 
 class ManagedCredentialType(SimpleNamespace):
-
     registry = {}
 
     def __init__(self, namespace, **kwargs):
@@ -1168,6 +1173,25 @@ ManagedCredentialType(
             },
         ],
         'required': ['url'],
+    },
+)
+
+ManagedCredentialType(
+    namespace='gpg_public_key',
+    kind='cryptography',
+    name=gettext_noop('GPG Public Key'),
+    inputs={
+        'fields': [
+            {
+                'id': 'gpg_public_key',
+                'label': gettext_noop('GPG Public Key'),
+                'type': 'string',
+                'secret': True,
+                'multiline': True,
+                'help_text': gettext_noop('GPG Public Key used to validate content signatures.'),
+            },
+        ],
+        'required': ['gpg_public_key'],
     },
 )
 

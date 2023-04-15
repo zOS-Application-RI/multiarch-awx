@@ -25,7 +25,8 @@ import {
   twilioPhoneNumber,
 } from 'util/validators';
 import { NotificationType } from 'types';
-import helpText from './Notifications.helptext';
+import Popover from '../../../components/Popover/Popover';
+import getHelpText from './Notifications.helptext';
 
 const TypeFields = {
   email: EmailFields,
@@ -58,6 +59,7 @@ TypeInputsSubForm.propTypes = {
 export default TypeInputsSubForm;
 
 function EmailFields() {
+  const helpText = getHelpText();
   return (
     <>
       <FormField
@@ -118,7 +120,11 @@ function EmailFields() {
         max="120"
         tooltip={helpText.emailTimeout}
       />
-      <FormGroup fieldId="email-options" label={t`E-mail options`}>
+      <FormGroup
+        fieldId="email-options"
+        label={t`Email Options`}
+        labelIcon={<Popover content={helpText.emailOptions} />}
+      >
         <FormCheckboxLayout>
           <CheckboxField
             id="option-use-ssl"
@@ -137,6 +143,7 @@ function EmailFields() {
 }
 
 function GrafanaFields() {
+  const helpText = getHelpText();
   return (
     <>
       <FormField
@@ -185,6 +192,8 @@ function GrafanaFields() {
 }
 
 function IRCFields() {
+  const helpText = getHelpText();
+
   return (
     <>
       <PasswordField
@@ -346,6 +355,8 @@ function RocketChatFields() {
 }
 
 function SlackFields() {
+  const helpText = getHelpText();
+
   return (
     <>
       <ArrayTextField
@@ -376,6 +387,8 @@ function SlackFields() {
 }
 
 function TwilioFields() {
+  const helpText = getHelpText();
+
   return (
     <>
       <PasswordField
@@ -416,6 +429,8 @@ function TwilioFields() {
 }
 
 function WebhookFields() {
+  const helpText = getHelpText();
+
   const [methodField, methodMeta] = useField({
     name: 'notification_configuration.http_method',
     validate: required(t`Select a value for this field`),

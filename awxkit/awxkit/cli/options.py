@@ -74,7 +74,6 @@ class JsonDumpsAction(argparse.Action):
 
 
 class ResourceOptionsParser(object):
-
     deprecated = False
 
     def __init__(self, v2, page, resource, parser):
@@ -122,6 +121,15 @@ class ResourceOptionsParser(object):
                     action='store_true',
                     help=('fetch all pages of content from the API when ' 'returning results (instead of just the first page)'),
                 )
+                parser.add_argument(
+                    '--order_by',
+                    dest='order_by',
+                    help=(
+                        'order results by given field name, '
+                        'prefix the field name with a dash (-) to sort in reverse eg --order_by=\'-name\','
+                        'multiple sorting fields may be specified by separating the field names with a comma (,)'
+                    ),
+                )
                 add_output_formatting_arguments(parser, {})
 
     def build_detail_actions(self):
@@ -155,7 +163,10 @@ class ResourceOptionsParser(object):
             if method == 'list' and param.get('filterable') is False:
                 continue
 
-            def json_or_yaml(v):
+            def list_of_json_or_yaml(v):
+                return json_or_yaml(v, expected_type=list)
+
+            def json_or_yaml(v, expected_type=dict):
                 if v.startswith('@'):
                     v = open(os.path.expanduser(v[1:])).read()
                 try:
@@ -166,15 +177,16 @@ class ResourceOptionsParser(object):
                     except Exception:
                         raise argparse.ArgumentTypeError("{} is not valid JSON or YAML".format(v))
 
-                if not isinstance(parsed, dict):
+                if not isinstance(parsed, expected_type):
                     raise argparse.ArgumentTypeError("{} is not valid JSON or YAML".format(v))
 
-                for k, v in parsed.items():
-                    # add support for file reading at top-level JSON keys
-                    # (to make things like SSH key data easier to work with)
-                    if isinstance(v, str) and v.startswith('@'):
-                        path = os.path.expanduser(v[1:])
-                        parsed[k] = open(path).read()
+                if expected_type is dict:
+                    for k, v in parsed.items():
+                        # add support for file reading at top-level JSON keys
+                        # (to make things like SSH key data easier to work with)
+                        if isinstance(v, str) and v.startswith('@'):
+                            path = os.path.expanduser(v[1:])
+                            parsed[k] = open(path).read()
 
                 return parsed
 
@@ -249,6 +261,19 @@ class ResourceOptionsParser(object):
 
                 if k == 'extra_vars':
                     args.append('-e')
+
+            # special handling for bulk endpoints
+            if self.resource == 'bulk':
+                if method == "host_create":
+                    if k == "inventory":
+                        kwargs['required'] = required = True
+                    if k == 'hosts':
+                        kwargs['type'] = list_of_json_or_yaml
+                        kwargs['required'] = required = True
+                if method == "job_launch":
+                    if k == 'jobs':
+                        kwargs['type'] = list_of_json_or_yaml
+                        kwargs['required'] = required = True
 
             if required:
                 if required_group is None:

@@ -2,17 +2,19 @@
 # All Rights Reserved.
 
 from __future__ import absolute_import, unicode_literals
-from django.conf import settings
 from django.urls import include, re_path
 
+from awx import MODE
 from awx.api.generics import LoggedLoginView, LoggedLogoutView
-from awx.api.views import (
+from awx.api.views.root import (
     ApiRootView,
     ApiV2RootView,
     ApiV2PingView,
     ApiV2ConfigView,
     ApiV2SubscriptionView,
     ApiV2AttachView,
+)
+from awx.api.views import (
     AuthView,
     UserMeList,
     DashboardView,
@@ -28,19 +30,29 @@ from awx.api.views import (
     OAuth2TokenList,
     ApplicationOAuth2TokenList,
     OAuth2ApplicationDetail,
-    MeshVisualizer,
+    # HostMetricSummaryMonthlyList, # It will be enabled in future version of the AWX
 )
 
+from awx.api.views.bulk import (
+    BulkView,
+    BulkHostCreateView,
+    BulkJobLaunchView,
+)
+
+from awx.api.views.mesh_visualizer import MeshVisualizer
+
 from awx.api.views.metrics import MetricsView
+from awx.api.views.analytics import AWX_ANALYTICS_API_PREFIX
 
 from .organization import urls as organization_urls
 from .user import urls as user_urls
 from .project import urls as project_urls
 from .project_update import urls as project_update_urls
-from .inventory import urls as inventory_urls
+from .inventory import urls as inventory_urls, constructed_inventory_urls
 from .execution_environments import urls as execution_environment_urls
 from .team import urls as team_urls
 from .host import urls as host_urls
+from .host_metric import urls as host_metric_urls
 from .group import urls as group_urls
 from .inventory_source import urls as inventory_source_urls
 from .inventory_update import urls as inventory_update_urls
@@ -71,7 +83,7 @@ from .oauth2 import urls as oauth2_urls
 from .oauth2_root import urls as oauth2_root_urls
 from .workflow_approval_template import urls as workflow_approval_template_urls
 from .workflow_approval import urls as workflow_approval_urls
-
+from .analytics import urls as analytics_urls
 
 v2_urls = [
     re_path(r'^$', ApiV2RootView.as_view(), name='api_v2_root_view'),
@@ -108,7 +120,11 @@ v2_urls = [
     re_path(r'^project_updates/', include(project_update_urls)),
     re_path(r'^teams/', include(team_urls)),
     re_path(r'^inventories/', include(inventory_urls)),
+    re_path(r'^constructed_inventories/', include(constructed_inventory_urls)),
     re_path(r'^hosts/', include(host_urls)),
+    re_path(r'^host_metrics/', include(host_metric_urls)),
+    # It will be enabled in future version of the AWX
+    # re_path(r'^host_metric_summary_monthly/$', HostMetricSummaryMonthlyList.as_view(), name='host_metric_summary_monthly_list'),
     re_path(r'^groups/', include(group_urls)),
     re_path(r'^inventory_sources/', include(inventory_source_urls)),
     re_path(r'^inventory_updates/', include(inventory_update_urls)),
@@ -132,8 +148,12 @@ v2_urls = [
     re_path(r'^unified_job_templates/$', UnifiedJobTemplateList.as_view(), name='unified_job_template_list'),
     re_path(r'^unified_jobs/$', UnifiedJobList.as_view(), name='unified_job_list'),
     re_path(r'^activity_stream/', include(activity_stream_urls)),
+    re_path(rf'^{AWX_ANALYTICS_API_PREFIX}/', include(analytics_urls)),
     re_path(r'^workflow_approval_templates/', include(workflow_approval_template_urls)),
     re_path(r'^workflow_approvals/', include(workflow_approval_urls)),
+    re_path(r'^bulk/$', BulkView.as_view(), name='bulk'),
+    re_path(r'^bulk/host_create/$', BulkHostCreateView.as_view(), name='bulk_host_create'),
+    re_path(r'^bulk/job_launch/$', BulkJobLaunchView.as_view(), name='bulk_job_launch'),
 ]
 
 
@@ -145,7 +165,12 @@ urlpatterns = [
     re_path(r'^logout/$', LoggedLogoutView.as_view(next_page='/api/', redirect_field_name='next'), name='logout'),
     re_path(r'^o/', include(oauth2_root_urls)),
 ]
-if settings.SETTINGS_MODULE == 'awx.settings.development':
+if MODE == 'development':
+    # Only include these if we are in the development environment
     from awx.api.swagger import SwaggerSchemaView
 
     urlpatterns += [re_path(r'^swagger/$', SwaggerSchemaView.as_view(), name='swagger_view')]
+
+    from awx.api.urls.debug import urls as debug_urls
+
+    urlpatterns += [re_path(r'^debug/', include(debug_urls))]

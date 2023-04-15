@@ -6,41 +6,26 @@ import os
 import re  # noqa
 import sys
 import tempfile
+import socket
 from datetime import timedelta
 
 
-# Build paths inside the project like this: os.path.join(BASE_DIR, ...)
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-
-
-def is_testing(argv=None):
-    import sys
-
-    '''Return True if running django or py.test unit tests.'''
-    if 'PYTEST_CURRENT_TEST' in os.environ.keys():
-        return True
-    argv = sys.argv if argv is None else argv
-    if len(argv) >= 1 and ('py.test' in argv[0] or 'py/test.py' in argv[0]):
-        return True
-    elif len(argv) >= 2 and argv[1] == 'test':
-        return True
-    return False
-
-
-def IS_TESTING(argv=None):
-    return is_testing(argv)
-
-
 if "pytest" in sys.modules:
+    IS_TESTING_MODE = True
     from unittest import mock
 
     with mock.patch('__main__.__builtins__.dir', return_value=[]):
         import ldap
 else:
+    IS_TESTING_MODE = False
     import ldap
+
 
 DEBUG = True
 SQL_DEBUG = DEBUG
+
+# Build paths inside the project like this: os.path.join(BASE_DIR, ...)
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 
 # FIXME: it would be nice to cycle back around and allow this to be
 # BigAutoField going forward, but we'd have to be explicit about our
@@ -100,11 +85,15 @@ USE_L10N = True
 
 USE_TZ = True
 
-STATICFILES_DIRS = (os.path.join(BASE_DIR, 'ui', 'build', 'static'), os.path.join(BASE_DIR, 'static'))
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'ui', 'build', 'static'),
+    os.path.join(BASE_DIR, 'ui_next', 'build'),
+    os.path.join(BASE_DIR, 'static'),
+]
 
 # Absolute filesystem path to the directory where static file are collected via
 # the collectstatic command.
-STATIC_ROOT = os.path.join(BASE_DIR, 'public', 'static')
+STATIC_ROOT = '/var/lib/awx/public/static'
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/dev/howto/static-files/
@@ -145,6 +134,13 @@ NAMED_URL_GRAPH = {}
 # Maximum number of the same job that can be waiting to run when launching from scheduler
 # Note: This setting may be overridden by database settings.
 SCHEDULE_MAX_JOBS = 10
+
+# Bulk API related settings
+# Maximum number of jobs that can be launched in 1 bulk job
+BULK_JOB_MAX_LAUNCH = 100
+
+# Maximum number of host that can be created in 1 bulk host create
+BULK_HOST_MAX_CREATE = 100
 
 SITE_ID = 1
 
@@ -232,6 +228,9 @@ JOB_EVENT_MAX_QUEUE_SIZE = 10000
 # The number of job events to migrate per-transaction when moving from int -> bigint
 JOB_EVENT_MIGRATION_CHUNK_SIZE = 1000000
 
+# The prefix of the redis key that stores metrics
+SUBSYSTEM_METRICS_REDIS_KEY_PREFIX = "awx_metrics"
+
 # Histogram buckets for the callback_receiver_batch_events_insert_db metric
 SUBSYSTEM_METRICS_BATCH_INSERT_BUCKETS = [10, 50, 150, 350, 650, 2000]
 
@@ -247,6 +246,19 @@ SUBSYSTEM_METRICS_TASK_MANAGER_RECORD_INTERVAL = 15
 
 # The maximum allowed jobs to start on a given task manager cycle
 START_TASK_LIMIT = 100
+
+# Time out task managers if they take longer than this many seconds, plus TASK_MANAGER_TIMEOUT_GRACE_PERIOD
+# We have the grace period so the task manager can bail out before the timeout.
+TASK_MANAGER_TIMEOUT = 300
+TASK_MANAGER_TIMEOUT_GRACE_PERIOD = 60
+
+# Number of seconds _in addition to_ the task manager timeout a job can stay
+# in waiting without being reaped
+JOB_WAITING_GRACE_PERIOD = 60
+
+# Number of seconds after a container group job finished time to wait
+# before the awx_k8s_reaper task will tear down the pods
+K8S_POD_REAPER_GRACE_PERIOD = 60
 
 # Disallow sending session cookies over insecure connections
 SESSION_COOKIE_SECURE = True
@@ -294,7 +306,12 @@ TEMPLATES = [
             ],
             'builtins': ['awx.main.templatetags.swagger'],
         },
-        'DIRS': [os.path.join(BASE_DIR, 'templates'), os.path.join(BASE_DIR, 'ui', 'build'), os.path.join(BASE_DIR, 'ui', 'public')],
+        'DIRS': [
+            os.path.join(BASE_DIR, 'templates'),
+            os.path.join(BASE_DIR, 'ui', 'build'),
+            os.path.join(BASE_DIR, 'ui', 'public'),
+            os.path.join(BASE_DIR, 'ui_next', 'build', 'awx'),
+        ],
     },
 ]
 
@@ -308,11 +325,13 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.sessions',
     'django.contrib.sites',
+    # daphne has to be installed before django.contrib.staticfiles for the app to startup
+    # According to channels 4.0 docs you install daphne instead of channels now
+    'daphne',
     'django.contrib.staticfiles',
     'oauth2_provider',
     'rest_framework',
     'django_extensions',
-    'channels',
     'polymorphic',
     'taggit',
     'social_django',
@@ -354,7 +373,7 @@ REST_FRAMEWORK = {
     # For swagger schema generation
     # see https://github.com/encode/django-rest-framework/pull/6532
     'DEFAULT_SCHEMA_CLASS': 'rest_framework.schemas.AutoSchema',
-    #'URL_FORMAT_OVERRIDE': None,
+    # 'URL_FORMAT_OVERRIDE': None,
 }
 
 AUTHENTICATION_BACKENDS = (
@@ -373,6 +392,7 @@ AUTHENTICATION_BACKENDS = (
     'social_core.backends.github_enterprise.GithubEnterpriseOAuth2',
     'social_core.backends.github_enterprise.GithubEnterpriseOrganizationOAuth2',
     'social_core.backends.github_enterprise.GithubEnterpriseTeamOAuth2',
+    'social_core.backends.open_id_connect.OpenIdConnectAuth',
     'social_core.backends.azuread.AzureADOAuth2',
     'awx.sso.backends.SAMLAuth',
     'awx.main.backends.AWXModelBackend',
@@ -419,6 +439,9 @@ AUTH_BASIC_ENABLED = True
 # when trying to access a UI page that requries authentication.
 LOGIN_REDIRECT_OVERRIDE = ''
 
+# Note: This setting may be overridden by database settings.
+ALLOW_METRICS_FOR_ANONYMOUS_USERS = False
+
 DEVSERVER_DEFAULT_ADDR = '0.0.0.0'
 DEVSERVER_DEFAULT_PORT = '8013'
 
@@ -427,6 +450,10 @@ os.environ.setdefault('DJANGO_LIVE_TEST_SERVER_ADDRESS', 'localhost:9013-9199')
 
 # heartbeat period can factor into some forms of logic, so it is maintained as a setting here
 CLUSTER_NODE_HEARTBEAT_PERIOD = 60
+
+# Number of missed heartbeats until a node gets marked as lost
+CLUSTER_NODE_MISSED_HEARTBEAT_TOLERANCE = 2
+
 RECEPTOR_SERVICE_ADVERTISEMENT_PERIOD = 60  # https://github.com/ansible/receptor/blob/aa1d589e154d8a0cb99a220aff8f98faf2273be6/pkg/netceptor/netceptor.go#L34
 EXECUTION_NODE_REMEDIATION_CHECKS = 60 * 30  # once every 30 minutes check if an execution node errors have been resolved
 
@@ -442,11 +469,13 @@ CELERYBEAT_SCHEDULE = {
         'options': {'expires': 50},
     },
     'gather_analytics': {'task': 'awx.main.tasks.system.gather_analytics', 'schedule': timedelta(minutes=5)},
-    'task_manager': {'task': 'awx.main.scheduler.tasks.run_task_manager', 'schedule': timedelta(seconds=20), 'options': {'expires': 20}},
+    'task_manager': {'task': 'awx.main.scheduler.tasks.task_manager', 'schedule': timedelta(seconds=20), 'options': {'expires': 20}},
+    'dependency_manager': {'task': 'awx.main.scheduler.tasks.dependency_manager', 'schedule': timedelta(seconds=20), 'options': {'expires': 20}},
     'k8s_reaper': {'task': 'awx.main.tasks.system.awx_k8s_reaper', 'schedule': timedelta(seconds=60), 'options': {'expires': 50}},
     'receptor_reaper': {'task': 'awx.main.tasks.system.awx_receptor_workunit_reaper', 'schedule': timedelta(seconds=60)},
     'send_subsystem_metrics': {'task': 'awx.main.analytics.analytics_tasks.send_subsystem_metrics', 'schedule': timedelta(seconds=20)},
     'cleanup_images': {'task': 'awx.main.tasks.system.cleanup_images_and_files', 'schedule': timedelta(hours=3)},
+    'cleanup_host_metrics': {'task': 'awx.main.tasks.system.cleanup_host_metrics', 'schedule': timedelta(days=1)},
 }
 
 # Django Caching Configuration
@@ -466,21 +495,15 @@ _SOCIAL_AUTH_PIPELINE_BASE = (
     'social_core.pipeline.user.get_username',
     'social_core.pipeline.social_auth.associate_by_email',
     'social_core.pipeline.user.create_user',
-    'awx.sso.pipeline.check_user_found_or_created',
+    'awx.sso.social_base_pipeline.check_user_found_or_created',
     'social_core.pipeline.social_auth.associate_user',
     'social_core.pipeline.social_auth.load_extra_data',
-    'awx.sso.pipeline.set_is_active_for_new_user',
+    'awx.sso.social_base_pipeline.set_is_active_for_new_user',
     'social_core.pipeline.user.user_details',
-    'awx.sso.pipeline.prevent_inactive_login',
+    'awx.sso.social_base_pipeline.prevent_inactive_login',
 )
-SOCIAL_AUTH_PIPELINE = _SOCIAL_AUTH_PIPELINE_BASE + ('awx.sso.pipeline.update_user_orgs', 'awx.sso.pipeline.update_user_teams')
-SOCIAL_AUTH_SAML_PIPELINE = _SOCIAL_AUTH_PIPELINE_BASE + (
-    'awx.sso.pipeline.update_user_orgs_by_saml_attr',
-    'awx.sso.pipeline.update_user_teams_by_saml_attr',
-    'awx.sso.pipeline.update_user_orgs',
-    'awx.sso.pipeline.update_user_teams',
-    'awx.sso.pipeline.update_user_flags',
-)
+SOCIAL_AUTH_PIPELINE = _SOCIAL_AUTH_PIPELINE_BASE + ('awx.sso.social_pipeline.update_user_orgs', 'awx.sso.social_pipeline.update_user_teams')
+SOCIAL_AUTH_SAML_PIPELINE = _SOCIAL_AUTH_PIPELINE_BASE + ('awx.sso.saml_pipeline.populate_user', 'awx.sso.saml_pipeline.update_user_flags')
 SAML_AUTO_CREATE_OBJECTS = True
 
 SOCIAL_AUTH_LOGIN_URL = '/'
@@ -741,6 +764,13 @@ CUSTOM_EXCLUDE_EMPTY_GROUPS = False
 SCM_EXCLUDE_EMPTY_GROUPS = False
 # SCM_INSTANCE_ID_VAR =
 
+# ----------------
+# -- Constructed --
+# ----------------
+CONSTRUCTED_INSTANCE_ID_VAR = 'remote_tower_id'
+
+CONSTRUCTED_EXCLUDE_EMPTY_GROUPS = False
+
 # ---------------------
 # -- Activity Stream --
 # ---------------------
@@ -763,6 +793,7 @@ INSIGHTS_URL_BASE = "https://example.org"
 INSIGHTS_AGENT_MIME = 'application/example'
 # See https://github.com/ansible/awx-facts-playbooks
 INSIGHTS_SYSTEM_ID_FILE = '/etc/redhat-access-insights/machine-id'
+INSIGHTS_CERT_PATH = "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
 
 TOWER_SETTINGS_MANIFEST = {}
 
@@ -807,85 +838,24 @@ LOGGING = {
         'dispatcher': {'format': '%(asctime)s %(levelname)-8s [%(guid)s] %(name)s PID:%(process)d %(message)s'},
         'job_lifecycle': {'()': 'awx.main.utils.formatters.JobLifeCycleFormatter'},
     },
+    # Extended below based on install scenario. You probably don't want to add something directly here.
+    # See 'handler_config' below.
     'handlers': {
         'console': {
             '()': 'logging.StreamHandler',
             'level': 'DEBUG',
-            'filters': ['require_debug_true_or_test', 'dynamic_level_filter', 'guid'],
+            'filters': ['dynamic_level_filter', 'guid'],
             'formatter': 'simple',
         },
         'null': {'class': 'logging.NullHandler'},
         'file': {'class': 'logging.NullHandler', 'formatter': 'simple'},
         'syslog': {'level': 'WARNING', 'filters': ['require_debug_false'], 'class': 'logging.NullHandler', 'formatter': 'simple'},
+        'inventory_import': {'level': 'DEBUG', 'class': 'logging.StreamHandler', 'formatter': 'timed_import'},
         'external_logger': {
             'class': 'awx.main.utils.handlers.RSysLogHandler',
             'formatter': 'json',
             'address': '/var/run/awx-rsyslog/rsyslog.sock',
             'filters': ['external_log_enabled', 'dynamic_level_filter', 'guid'],
-        },
-        'tower_warnings': {
-            # don't define a level here, it's set by settings.LOG_AGGREGATOR_LEVEL
-            'class': 'logging.handlers.WatchedFileHandler',
-            'filters': ['require_debug_false', 'dynamic_level_filter', 'guid'],
-            'filename': os.path.join(LOG_ROOT, 'tower.log'),
-            'formatter': 'simple',
-        },
-        'callback_receiver': {
-            # don't define a level here, it's set by settings.LOG_AGGREGATOR_LEVEL
-            'class': 'logging.handlers.WatchedFileHandler',
-            'filters': ['require_debug_false', 'dynamic_level_filter', 'guid'],
-            'filename': os.path.join(LOG_ROOT, 'callback_receiver.log'),
-            'formatter': 'simple',
-        },
-        'dispatcher': {
-            # don't define a level here, it's set by settings.LOG_AGGREGATOR_LEVEL
-            'class': 'logging.handlers.WatchedFileHandler',
-            'filters': ['require_debug_false', 'dynamic_level_filter', 'guid'],
-            'filename': os.path.join(LOG_ROOT, 'dispatcher.log'),
-            'formatter': 'dispatcher',
-        },
-        'wsbroadcast': {
-            # don't define a level here, it's set by settings.LOG_AGGREGATOR_LEVEL
-            'class': 'logging.handlers.WatchedFileHandler',
-            'filters': ['require_debug_false', 'dynamic_level_filter', 'guid'],
-            'filename': os.path.join(LOG_ROOT, 'wsbroadcast.log'),
-            'formatter': 'simple',
-        },
-        'celery.beat': {'class': 'logging.StreamHandler', 'level': 'ERROR'},  # don't log every celerybeat wakeup
-        'inventory_import': {'level': 'DEBUG', 'class': 'logging.StreamHandler', 'formatter': 'timed_import'},
-        'task_system': {
-            # don't define a level here, it's set by settings.LOG_AGGREGATOR_LEVEL
-            'class': 'logging.handlers.WatchedFileHandler',
-            'filters': ['require_debug_false', 'dynamic_level_filter', 'guid'],
-            'filename': os.path.join(LOG_ROOT, 'task_system.log'),
-            'formatter': 'simple',
-        },
-        'management_playbooks': {
-            'level': 'DEBUG',
-            'class': 'logging.handlers.WatchedFileHandler',
-            'filters': ['require_debug_false'],
-            'filename': os.path.join(LOG_ROOT, 'management_playbooks.log'),
-            'formatter': 'simple',
-        },
-        'system_tracking_migrations': {
-            'level': 'WARNING',
-            'class': 'logging.handlers.WatchedFileHandler',
-            'filters': ['require_debug_false'],
-            'filename': os.path.join(LOG_ROOT, 'tower_system_tracking_migrations.log'),
-            'formatter': 'simple',
-        },
-        'rbac_migrations': {
-            'level': 'WARNING',
-            'class': 'logging.handlers.WatchedFileHandler',
-            'filters': ['require_debug_false'],
-            'filename': os.path.join(LOG_ROOT, 'tower_rbac_migrations.log'),
-            'formatter': 'simple',
-        },
-        'job_lifecycle': {
-            'level': 'DEBUG',
-            'class': 'logging.handlers.WatchedFileHandler',
-            'filename': os.path.join(LOG_ROOT, 'job_lifecycle.log'),
-            'formatter': 'job_lifecycle',
         },
     },
     'loggers': {
@@ -901,7 +871,10 @@ LOGGING = {
         'awx.main.commands.run_callback_receiver': {'handlers': ['callback_receiver']},  # level handled by dynamic_level_filter
         'awx.main.dispatch': {'handlers': ['dispatcher']},
         'awx.main.consumers': {'handlers': ['console', 'file', 'tower_warnings'], 'level': 'INFO'},
-        'awx.main.wsbroadcast': {'handlers': ['wsbroadcast']},
+        'awx.main.rsyslog_configurer': {'handlers': ['rsyslog_configurer']},
+        'awx.main.cache_clear': {'handlers': ['cache_clear']},
+        'awx.main.heartbeet': {'handlers': ['heartbeet']},
+        'awx.main.wsrelay': {'handlers': ['wsrelay']},
         'awx.main.commands.inventory_import': {'handlers': ['inventory_import'], 'propagate': False},
         'awx.main.tasks': {'handlers': ['task_system', 'external_logger'], 'propagate': False},
         'awx.main.analytics': {'handlers': ['task_system', 'external_logger'], 'level': 'INFO', 'propagate': False},
@@ -910,6 +883,7 @@ LOGGING = {
         'awx.main.signals': {'level': 'INFO'},  # very verbose debug-level logs
         'awx.api.permissions': {'level': 'INFO'},  # very verbose debug-level logs
         'awx.analytics': {'handlers': ['external_logger'], 'level': 'INFO', 'propagate': False},
+        'awx.analytics.broadcast_websocket': {'handlers': ['console', 'file', 'wsrelay', 'external_logger'], 'level': 'INFO', 'propagate': False},
         'awx.analytics.performance': {'handlers': ['console', 'file', 'tower_warnings', 'external_logger'], 'level': 'DEBUG', 'propagate': False},
         'awx.analytics.job_lifecycle': {'handlers': ['console', 'job_lifecycle'], 'level': 'DEBUG', 'propagate': False},
         'django_auth_ldap': {'handlers': ['console', 'file', 'tower_warnings'], 'level': 'DEBUG'},
@@ -918,6 +892,43 @@ LOGGING = {
         'rbac_migrations': {'handlers': ['console', 'file', 'tower_warnings'], 'level': 'DEBUG'},
     },
 }
+
+# Log handler configuration. Keys are the name of the handler. Be mindful when renaming things here.
+# People might have created custom settings files that augments the behavior of these.
+# Specify 'filename' (used if the environment variable AWX_LOGGING_MODE is unset or 'file')
+# and an optional 'formatter'. If no formatter is specified, 'simple' is used.
+handler_config = {
+    'tower_warnings': {'filename': 'tower.log'},
+    'callback_receiver': {'filename': 'callback_receiver.log'},
+    'dispatcher': {'filename': 'dispatcher.log', 'formatter': 'dispatcher'},
+    'wsrelay': {'filename': 'wsrelay.log'},
+    'task_system': {'filename': 'task_system.log'},
+    'rbac_migrations': {'filename': 'tower_rbac_migrations.log'},
+    'job_lifecycle': {'filename': 'job_lifecycle.log', 'formatter': 'job_lifecycle'},
+    'rsyslog_configurer': {'filename': 'rsyslog_configurer.log'},
+    'cache_clear': {'filename': 'cache_clear.log'},
+    'heartbeet': {'filename': 'heartbeet.log'},
+}
+
+# If running on a VM, we log to files. When running in a container, we log to stdout.
+logging_mode = os.getenv('AWX_LOGGING_MODE', 'file')
+if logging_mode not in ('file', 'stdout'):
+    raise Exception("AWX_LOGGING_MODE must be 'file' or 'stdout'")
+
+for name, config in handler_config.items():
+    # Common log handler config. Don't define a level here, it's set by settings.LOG_AGGREGATOR_LEVEL
+    LOGGING['handlers'][name] = {'filters': ['dynamic_level_filter', 'guid'], 'formatter': config.get('formatter', 'simple')}
+
+    if logging_mode == 'file':
+        LOGGING['handlers'][name]['class'] = 'logging.handlers.WatchedFileHandler'
+        LOGGING['handlers'][name]['filename'] = os.path.join(LOG_ROOT, config['filename'])
+
+    if logging_mode == 'stdout':
+        LOGGING['handlers'][name]['class'] = 'logging.NullHandler'
+
+# Prevents logging to stdout on traditional VM installs
+if logging_mode == 'file':
+    LOGGING['handlers']['console']['filters'].insert(0, 'require_debug_true_or_test')
 
 # Apply coloring to messages logged to the console
 COLOR_LOGS = False
@@ -953,6 +964,11 @@ AWX_RUNNER_OMIT_ENV_FILES = True
 
 # Allow ansible-runner to save ansible output (may cause performance issues)
 AWX_RUNNER_SUPPRESS_OUTPUT_FILE = True
+
+# https://github.com/ansible/ansible-runner/pull/1191/files
+# Interval in seconds between the last message and keep-alive messages that
+# ansible-runner will send
+AWX_RUNNER_KEEPALIVE_SECONDS = 0
 
 # Delete completed work units in receptor
 RECEPTOR_RELEASE_WORK = True
@@ -1002,12 +1018,22 @@ BROADCAST_WEBSOCKET_NEW_INSTANCE_POLL_RATE_SECONDS = 10
 # How often websocket process will generate stats
 BROADCAST_WEBSOCKET_STATS_POLL_RATE_SECONDS = 5
 
+# How often should web instances advertise themselves?
+BROADCAST_WEBSOCKET_BEACON_FROM_WEB_RATE_SECONDS = 15
+
 DJANGO_GUID = {'GUID_HEADER_NAME': 'X-API-Request-Id'}
 
 # Name of the default task queue
 DEFAULT_EXECUTION_QUEUE_NAME = 'default'
 # pod spec used when the default execution queue is a container group, e.g. when deploying on k8s/ocp with the operator
 DEFAULT_EXECUTION_QUEUE_POD_SPEC_OVERRIDE = ''
+# Max number of concurrently consumed forks for the default execution queue
+# Zero means no limit
+DEFAULT_EXECUTION_QUEUE_MAX_FORKS = 0
+# Max number of concurrently running jobs for the default execution queue
+# Zero means no limit
+DEFAULT_EXECUTION_QUEUE_MAX_CONCURRENT_JOBS = 0
+
 # Name of the default controlplane queue
 DEFAULT_CONTROL_PLANE_QUEUE_NAME = 'controlplane'
 
@@ -1018,3 +1044,20 @@ DEFAULT_CONTAINER_RUN_OPTIONS = ['--network', 'slirp4netns:enable_ipv6=true']
 
 # Mount exposed paths as hostPath resource in k8s/ocp
 AWX_MOUNT_ISOLATED_PATHS_ON_K8S = False
+
+# This is overridden downstream via /etc/tower/conf.d/cluster_host_id.py
+CLUSTER_HOST_ID = socket.gethostname()
+
+UI_NEXT = True
+
+# License compliance for total host count. Possible values:
+# - '': No model - Subscription not counted from Host Metrics
+# - 'unique_managed_hosts': Compliant = automated - deleted hosts (using /api/v2/host_metrics/)
+SUBSCRIPTION_USAGE_MODEL = ''
+
+# Host metrics cleanup - last time of the cleanup run (soft-deleting records)
+CLEANUP_HOST_METRICS_LAST_TS = None
+# Host metrics cleanup - minimal interval between two cleanups in days
+CLEANUP_HOST_METRICS_INTERVAL = 30  # days
+# Host metrics cleanup - soft-delete HostMetric records with last_automation < [threshold] (in months)
+CLEANUP_HOST_METRICS_THRESHOLD = 12  # months

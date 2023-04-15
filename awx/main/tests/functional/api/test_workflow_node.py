@@ -13,7 +13,10 @@ from awx.main.models.workflow import (
     WorkflowJobTemplateNode,
 )
 from awx.main.models.credential import Credential
-from awx.main.scheduler import TaskManager
+from awx.main.scheduler import TaskManager, WorkflowManager, DependencyManager
+
+# Django
+from django.utils.timezone import now, timedelta
 
 
 @pytest.fixture
@@ -73,6 +76,18 @@ class TestApprovalNodes:
         assert approval_node.unified_job_template.name == 'Test'
         assert approval_node.unified_job_template.description == 'Approval Node'
         assert approval_node.unified_job_template.timeout == 0
+
+    def test_approval_node_creation_with_timeout(self, post, approval_node, admin_user):
+        assert approval_node.timeout is None
+
+        url = reverse('api:workflow_job_template_node_create_approval', kwargs={'pk': approval_node.pk, 'version': 'v2'})
+        post(url, {'name': 'Test', 'description': 'Approval Node', 'timeout': 10}, user=admin_user, expect=201)
+
+        approval_node = WorkflowJobTemplateNode.objects.get(pk=approval_node.pk)
+        approval_node.refresh_from_db()
+        assert approval_node.timeout is None
+        assert isinstance(approval_node.unified_job_template, WorkflowApprovalTemplate)
+        assert approval_node.unified_job_template.timeout == 10
 
     def test_approval_node_creation_failure(self, post, approval_node, admin_user):
         # This test leaves off a required param to assert that user will get a 400.
@@ -137,8 +152,9 @@ class TestApprovalNodes:
         post(url, {'name': 'Approve Test', 'description': '', 'timeout': 0}, user=admin_user, expect=201)
         post(reverse('api:workflow_job_template_launch', kwargs={'pk': wfjt.pk}), user=admin_user, expect=201)
         wf_job = WorkflowJob.objects.first()
+        DependencyManager().schedule()  # TODO: exclude workflows from this and delete line
         TaskManager().schedule()
-        TaskManager().schedule()
+        WorkflowManager().schedule()
         wfj_node = wf_job.workflow_nodes.first()
         approval = wfj_node.job
         assert approval.name == 'Approve Test'
@@ -162,8 +178,9 @@ class TestApprovalNodes:
         post(url, {'name': 'Deny Test', 'description': '', 'timeout': 0}, user=admin_user, expect=201)
         post(reverse('api:workflow_job_template_launch', kwargs={'pk': wfjt.pk}), user=admin_user, expect=201)
         wf_job = WorkflowJob.objects.first()
+        DependencyManager().schedule()  # TODO: exclude workflows from this and delete line
         TaskManager().schedule()
-        TaskManager().schedule()
+        WorkflowManager().schedule()
         wfj_node = wf_job.workflow_nodes.first()
         approval = wfj_node.job
         assert approval.name == 'Deny Test'
@@ -215,6 +232,37 @@ class TestApprovalNodes:
         approval_template.delete()
         approval.refresh_from_db()
         assert approval.status == 'failed'
+
+    def test_expires_time_on_creation(self):
+        now_time = now()
+        wa = WorkflowApproval.objects.create(timeout=34)
+        # this is fudged, so we assert that the expires time is in reasonable range
+        assert timedelta(seconds=33) < (wa.expires - now_time) < timedelta(seconds=35)
+
+    @pytest.mark.parametrize('with_update_fields', [True, False])
+    def test_expires_time_update(self, with_update_fields):
+        wa = WorkflowApproval.objects.create()
+        assert wa.timeout == 0
+        assert wa.expires is None
+        wa.timeout = 1234
+        if with_update_fields:
+            wa.save(update_fields=['timeout'])
+        else:
+            wa.save()
+        assert wa.created + timedelta(seconds=1234) == wa.expires
+
+    @pytest.mark.parametrize('with_update_fields', [True, False])
+    def test_reset_timeout_and_expires(self, with_update_fields):
+        wa = WorkflowApproval.objects.create()
+        wa.timeout = 1234
+        wa.save()
+        assert wa.expires
+        wa.timeout = 0
+        if with_update_fields:
+            wa.save(update_fields=['timeout'])
+        else:
+            wa.save()
+        assert wa.expires is None
 
 
 @pytest.mark.django_db

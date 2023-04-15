@@ -28,12 +28,14 @@ import DeleteButton from 'components/DeleteButton';
 import ErrorDetail from 'components/ErrorDetail';
 import { LaunchButton } from 'components/LaunchButton';
 import { VariablesDetail } from 'components/CodeEditor';
+import { VERBOSITY } from 'components/VerbositySelectField';
 import { JobTemplatesAPI } from 'api';
 import useRequest, { useDismissableError } from 'hooks/useRequest';
 import useBrandName from 'hooks/useBrandName';
 import ExecutionEnvironmentDetail from 'components/ExecutionEnvironmentDetail';
 import { relatedResourceDeleteRequests } from 'util/getRelatedResourceDeleteDetails';
-import helpText from '../shared/JobTemplate.helptext';
+import InstanceGroupLabels from 'components/InstanceGroupLabels';
+import getHelpText from '../shared/JobTemplate.helptext';
 
 function JobTemplateDetail({ template }) {
   const {
@@ -62,12 +64,13 @@ function JobTemplateDetail({ template }) {
     webhook_service,
     related: { webhook_receiver },
     webhook_key,
+    prevent_instance_group_fallback,
     custom_virtualenv,
   } = template;
   const { id: templateId } = useParams();
   const history = useHistory();
   const brandName = useBrandName();
-
+  const helpText = getHelpText();
   const {
     isLoading: isLoadingInstanceGroups,
     request: fetchInstanceGroups,
@@ -104,24 +107,14 @@ function JobTemplateDetail({ template }) {
     relatedResourceDeleteRequests.template(template);
   const canLaunch =
     summary_fields.user_capabilities && summary_fields.user_capabilities.start;
-  const verbosityOptions = [
-    { verbosity: 0, details: t`0 (Normal)` },
-    { verbosity: 1, details: t`1 (Verbose)` },
-    { verbosity: 2, details: t`2 (More Verbose)` },
-    { verbosity: 3, details: t`3 (Debug)` },
-    { verbosity: 4, details: t`4 (Connection Debug)` },
-    { verbosity: 5, details: t`5 (WinRM Debug)` },
-  ];
-  const verbosityDetails = verbosityOptions.filter(
-    (option) => option.verbosity === verbosity
-  );
   const generateCallBackUrl = `${window.location.origin + url}callback/`;
   const renderOptionsField =
     become_enabled ||
     host_config_key ||
     allow_simultaneous ||
     use_fact_cache ||
-    webhook_service;
+    webhook_service ||
+    prevent_instance_group_fallback;
 
   const renderOptions = (
     <TextList component={TextListVariants.ul}>
@@ -150,6 +143,11 @@ function JobTemplateDetail({ template }) {
           {t`Webhooks`}
         </TextListItem>
       )}
+      {prevent_instance_group_fallback && (
+        <TextListItem component={TextListItemVariants.li}>
+          {t`Prevent Instance Group Fallback`}
+        </TextListItem>
+      )}
     </TextList>
   );
 
@@ -169,11 +167,6 @@ function JobTemplateDetail({ template }) {
       </Link>
     );
   };
-
-  const buildLinkURL = (instance) =>
-    instance.is_container_group
-      ? '/instance_groups/container_group/'
-      : '/instance_groups/';
 
   if (instanceGroupsError) {
     return <ContentError error={instanceGroupsError} />;
@@ -272,7 +265,7 @@ function JobTemplateDetail({ template }) {
         />
         <Detail
           label={t`Verbosity`}
-          value={verbosityDetails[0].details}
+          value={VERBOSITY()[verbosity]}
           dataCy="jt-detail-verbosity"
           helpText={helpText.verbosity}
         />
@@ -345,6 +338,13 @@ function JobTemplateDetail({ template }) {
             }
           />
         )}
+        {prevent_instance_group_fallback && (
+          <Detail
+            label={t`Prevent Instance Group Fallback`}
+            dataCy="jt-detail-prevent-instnace-group-fallback"
+            helpText={helpText.preventInstanceGroupFallback}
+          />
+        )}
         <UserDateDetail
           label={t`Created`}
           date={created}
@@ -364,7 +364,7 @@ function JobTemplateDetail({ template }) {
             helpText={helpText.enabledOptions}
           />
         )}
-        {summary_fields.credentials && summary_fields.credentials.length > 0 && (
+        {summary_fields.credentials && (
           <Detail
             fullWidth
             label={t`Credentials`}
@@ -388,9 +388,10 @@ function JobTemplateDetail({ template }) {
                 ))}
               </ChipGroup>
             }
+            isEmpty={summary_fields.credentials.length === 0}
           />
         )}
-        {summary_fields.labels && summary_fields.labels.results.length > 0 && (
+        {summary_fields.labels && (
           <Detail
             fullWidth
             label={t`Labels`}
@@ -409,36 +410,18 @@ function JobTemplateDetail({ template }) {
                 ))}
               </ChipGroup>
             }
+            isEmpty={summary_fields.labels.results.length === 0}
           />
         )}
-        {instanceGroups.length > 0 && (
-          <Detail
-            fullWidth
-            label={t`Instance Groups`}
-            dataCy="jt-detail-instance-groups"
-            helpText={helpText.instanceGroups}
-            value={
-              <ChipGroup
-                numChips={5}
-                totalChips={instanceGroups.length}
-                ouiaId="instance-group-chips"
-              >
-                {instanceGroups.map((ig) => (
-                  <Link to={`${buildLinkURL(ig)}${ig.id}/details`} key={ig.id}>
-                    <Chip
-                      key={ig.id}
-                      ouiaId={`instance-group-${ig.id}-chip`}
-                      isReadOnly
-                    >
-                      {ig.name}
-                    </Chip>
-                  </Link>
-                ))}
-              </ChipGroup>
-            }
-          />
-        )}
-        {job_tags && job_tags.length > 0 && (
+        <Detail
+          fullWidth
+          label={t`Instance Groups`}
+          dataCy="jt-detail-instance-groups"
+          helpText={helpText.instanceGroups}
+          value={<InstanceGroupLabels labels={instanceGroups} isLinkable />}
+          isEmpty={instanceGroups.length === 0}
+        />
+        {job_tags && (
           <Detail
             fullWidth
             label={t`Job Tags`}
@@ -461,9 +444,10 @@ function JobTemplateDetail({ template }) {
                 ))}
               </ChipGroup>
             }
+            isEmpty={job_tags.length === 0}
           />
         )}
-        {skip_tags && skip_tags.length > 0 && (
+        {skip_tags && (
           <Detail
             fullWidth
             label={t`Skip Tags`}
@@ -486,6 +470,7 @@ function JobTemplateDetail({ template }) {
                 ))}
               </ChipGroup>
             }
+            isEmpty={skip_tags.length === 0}
           />
         )}
         <VariablesDetail

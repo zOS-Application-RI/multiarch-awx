@@ -6,8 +6,7 @@ dockerfile_dest: '../..'
 dockerfile_name: 'Dockerfile'
 template_dest: '_build'
 
-receptor_image: quay.io/ansible/receptor:devel
+receptor_image: docker.io/ashish1981/receptor:latest
 
 # Helper vars to construct the proper download URL for the current architecture
-tini_architecture: '{{ { "x86_64": "amd64", "aarch64": "arm64", "armv7": "arm" }[ansible_facts.architecture] }}'
-kubectl_architecture: '{{ { "x86_64": "amd64", "aarch64": "arm64", "armv7": "arm" }[ansible_facts.architecture] }}'
+image_architecture: '{{ { "x86_64": "amd64", "aarch64": "arm64", "armv7": "arm", "arm64": "arm64", "ppc64le": "ppc64le", "s390x": "s390x" }[ansible_facts.architecture] }}'

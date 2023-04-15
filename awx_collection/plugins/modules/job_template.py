@@ -84,7 +84,7 @@ options:
       type: str
     execution_environment:
       description:
-        - Execution Environment to use for the JT.
+        - Execution Environment to use for the job template.
       type: str
     custom_virtualenv:
       description:
@@ -109,7 +109,6 @@ options:
       description:
         - Control the output level Ansible produces as the playbook runs. 0 - Normal, 1 - Verbose, 2 - More Verbose, 3 - Debug, 4 - Connection Debug.
       choices: [0, 1, 2, 3, 4]
-      default: 0
       type: int
     extra_vars:
       description:
@@ -123,7 +122,6 @@ options:
       description:
         - Enable forcing playbook handlers to run even if a task fails.
       type: bool
-      default: 'no'
       aliases:
         - force_handlers_enabled
     skip_tags:
@@ -208,6 +206,42 @@ options:
       type: bool
       aliases:
         - ask_credential
+    ask_execution_environment_on_launch:
+      description:
+        - Prompt user for execution environment on launch.
+      type: bool
+      aliases:
+        - ask_execution_environment
+    ask_forks_on_launch:
+      description:
+        - Prompt user for forks on launch.
+      type: bool
+      aliases:
+        - ask_forks
+    ask_instance_groups_on_launch:
+      description:
+        - Prompt user for instance groups on launch.
+      type: bool
+      aliases:
+        - ask_instance_groups
+    ask_job_slice_count_on_launch:
+      description:
+        - Prompt user for job slice count on launch.
+      type: bool
+      aliases:
+        - ask_job_slice_count
+    ask_labels_on_launch:
+      description:
+        - Prompt user for labels on launch.
+      type: bool
+      aliases:
+        - ask_labels
+    ask_timeout_on_launch:
+      description:
+        - Prompt user for timeout on launch.
+      type: bool
+      aliases:
+        - ask_timeout
     survey_enabled:
       description:
         - Enable a survey on the job template.
@@ -230,11 +264,11 @@ options:
       description:
         - Maximum time in seconds to wait for a job to finish (server-side).
       type: int
+      default: 0
     job_slice_count:
       description:
         - The number of jobs to slice into at runtime. Will cause the Job Template to launch a workflow if value is greater than 1.
       type: int
-      default: '1'
     webhook_service:
       description:
         - Service that webhook requests will be accepted from
@@ -251,7 +285,6 @@ options:
       description:
         - Branch to use in job run. Project default used if blank. Only allowed if project allow_override field is set to true.
       type: str
-      default: ''
     labels:
       description:
         - The labels applied to this job template
@@ -279,6 +312,10 @@ options:
         - list of notifications to send on error
       type: list
       elements: str
+    prevent_instance_group_fallback:
+      description:
+        - Prevent falling back to instance groups set on the associated inventory or organization
+      type: bool
 
 extends_documentation_fragment: awx.awx.auth
 
@@ -300,6 +337,7 @@ EXAMPLES = '''
     playbook: "ping.yml"
     credentials:
       - "Local"
+      - "2nd credential"
     state: "present"
     controller_config_file: "~/tower_cli.cfg"
     survey_enabled: yes
@@ -367,13 +405,13 @@ def main():
         instance_groups=dict(type="list", elements='str'),
         forks=dict(type='int'),
         limit=dict(),
-        verbosity=dict(type='int', choices=[0, 1, 2, 3, 4], default=0),
+        verbosity=dict(type='int', choices=[0, 1, 2, 3, 4]),
         extra_vars=dict(type='dict'),
         job_tags=dict(),
-        force_handlers=dict(type='bool', default=False, aliases=['force_handlers_enabled']),
+        force_handlers=dict(type='bool', aliases=['force_handlers_enabled']),
         skip_tags=dict(),
         start_at_task=dict(),
-        timeout=dict(type='int', default=0),
+        timeout=dict(type='int'),
         use_fact_cache=dict(type='bool', aliases=['fact_caching_enabled']),
         host_config_key=dict(no_log=False),
         ask_diff_mode_on_launch=dict(type='bool', aliases=['ask_diff_mode']),
@@ -385,6 +423,12 @@ def main():
         ask_verbosity_on_launch=dict(type='bool', aliases=['ask_verbosity']),
         ask_inventory_on_launch=dict(type='bool', aliases=['ask_inventory']),
         ask_credential_on_launch=dict(type='bool', aliases=['ask_credential']),
+        ask_execution_environment_on_launch=dict(type='bool', aliases=['ask_execution_environment']),
+        ask_forks_on_launch=dict(type='bool', aliases=['ask_forks']),
+        ask_instance_groups_on_launch=dict(type='bool', aliases=['ask_instance_groups']),
+        ask_job_slice_count_on_launch=dict(type='bool', aliases=['ask_job_slice_count']),
+        ask_labels_on_launch=dict(type='bool', aliases=['ask_labels']),
+        ask_timeout_on_launch=dict(type='bool', aliases=['ask_timeout']),
         survey_enabled=dict(type='bool'),
         survey_spec=dict(type="dict"),
         become_enabled=dict(type='bool'),
@@ -392,13 +436,14 @@ def main():
         allow_simultaneous=dict(type='bool', aliases=['concurrent_jobs_enabled']),
         scm_branch=dict(),
         ask_scm_branch_on_launch=dict(type='bool'),
-        job_slice_count=dict(type='int', default='1'),
+        job_slice_count=dict(type='int'),
         webhook_service=dict(choices=['github', 'gitlab', '']),
         webhook_credential=dict(),
         labels=dict(type="list", elements='str'),
         notification_templates_started=dict(type="list", elements='str'),
         notification_templates_success=dict(type="list", elements='str'),
         notification_templates_error=dict(type="list", elements='str'),
+        prevent_instance_group_fallback=dict(type="bool"),
         state=dict(choices=['present', 'absent'], default='present'),
     )
 
@@ -484,6 +529,12 @@ def main():
         'ask_verbosity_on_launch',
         'ask_inventory_on_launch',
         'ask_credential_on_launch',
+        'ask_execution_environment_on_launch',
+        'ask_forks_on_launch',
+        'ask_instance_groups_on_launch',
+        'ask_job_slice_count_on_launch',
+        'ask_labels_on_launch',
+        'ask_timeout_on_launch',
         'survey_enabled',
         'become_enabled',
         'diff_mode',
@@ -491,6 +542,7 @@ def main():
         'custom_virtualenv',
         'job_slice_count',
         'webhook_service',
+        'prevent_instance_group_fallback',
     ):
         field_val = module.params.get(field_name)
         if field_val is not None:

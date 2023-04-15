@@ -2,12 +2,8 @@
 # All Rights Reserved.
 
 # Python
-import codecs
-import datetime
 import logging
-import os
 import time
-import json
 from urllib.parse import urljoin
 
 
@@ -15,10 +11,9 @@ from urllib.parse import urljoin
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.functions import Cast
 
 # from django.core.cache import cache
-from django.utils.encoding import smart_str
-from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 from django.core.exceptions import FieldDoesNotExist
 
@@ -27,6 +22,7 @@ from rest_framework.exceptions import ParseError
 
 # AWX
 from awx.api.versioning import reverse
+from awx.main.constants import HOST_FACTS_FIELDS
 from awx.main.models.base import (
     BaseModel,
     CreatedModifiedModel,
@@ -43,8 +39,8 @@ from awx.main.models.notifications import (
     NotificationTemplate,
     JobNotificationMixin,
 )
-from awx.main.utils import parse_yaml_or_json, getattr_dne, NullablePromptPseudoField
-from awx.main.fields import ImplicitRoleField, AskForField, JSONBlob
+from awx.main.utils import parse_yaml_or_json, getattr_dne, NullablePromptPseudoField, polymorphic
+from awx.main.fields import ImplicitRoleField, AskForField, JSONBlob, OrderedManyToManyField
 from awx.main.models.mixins import (
     ResourceMixin,
     SurveyJobTemplateMixin,
@@ -59,8 +55,6 @@ from awx.main.constants import JOB_VARIABLE_PREFIXES
 
 
 logger = logging.getLogger('awx.main.models.jobs')
-analytics_logger = logging.getLogger('awx.analytics.job_events')
-system_tracking_logger = logging.getLogger('awx.analytics.system_tracking')
 
 __all__ = ['JobTemplate', 'JobLaunchConfig', 'Job', 'JobHostSummary', 'SystemJobTemplate', 'SystemJob']
 
@@ -203,7 +197,7 @@ class JobTemplate(UnifiedJobTemplate, JobOptions, SurveyJobTemplateMixin, Resour
     playbook) to an inventory source with a given credential.
     """
 
-    FIELDS_TO_PRESERVE_AT_COPY = ['labels', 'instance_groups', 'credentials', 'survey_spec']
+    FIELDS_TO_PRESERVE_AT_COPY = ['labels', 'instance_groups', 'credentials', 'survey_spec', 'prevent_instance_group_fallback']
     FIELDS_TO_DISCARD_AT_COPY = ['vault_credential', 'credential']
     SOFT_UNIQUE_TOGETHER = [('polymorphic_ctype', 'name', 'organization')]
 
@@ -227,15 +221,6 @@ class JobTemplate(UnifiedJobTemplate, JobOptions, SurveyJobTemplateMixin, Resour
         blank=True,
         default=False,
     )
-    ask_limit_on_launch = AskForField(
-        blank=True,
-        default=False,
-    )
-    ask_tags_on_launch = AskForField(blank=True, default=False, allows_field='job_tags')
-    ask_skip_tags_on_launch = AskForField(
-        blank=True,
-        default=False,
-    )
     ask_job_type_on_launch = AskForField(
         blank=True,
         default=False,
@@ -244,12 +229,27 @@ class JobTemplate(UnifiedJobTemplate, JobOptions, SurveyJobTemplateMixin, Resour
         blank=True,
         default=False,
     )
-    ask_inventory_on_launch = AskForField(
+    ask_credential_on_launch = AskForField(blank=True, default=False, allows_field='credentials')
+    ask_execution_environment_on_launch = AskForField(
         blank=True,
         default=False,
     )
-    ask_credential_on_launch = AskForField(blank=True, default=False, allows_field='credentials')
-    ask_scm_branch_on_launch = AskForField(blank=True, default=False, allows_field='scm_branch')
+    ask_forks_on_launch = AskForField(
+        blank=True,
+        default=False,
+    )
+    ask_job_slice_count_on_launch = AskForField(
+        blank=True,
+        default=False,
+    )
+    ask_timeout_on_launch = AskForField(
+        blank=True,
+        default=False,
+    )
+    ask_instance_groups_on_launch = AskForField(
+        blank=True,
+        default=False,
+    )
     job_slice_count = models.PositiveIntegerField(
         blank=True,
         default=1,
@@ -268,6 +268,15 @@ class JobTemplate(UnifiedJobTemplate, JobOptions, SurveyJobTemplateMixin, Resour
             'admin_role',
         ],
     )
+    prevent_instance_group_fallback = models.BooleanField(
+        default=False,
+        help_text=(
+            "If enabled, the job template will prevent adding any inventory or organization "
+            "instance groups to the list of preferred instances groups to run on."
+            "If this setting is enabled and you provided an empty list, the global instance "
+            "groups will be applied."
+        ),
+    )
 
     @classmethod
     def _get_unified_job_class(cls):
@@ -276,7 +285,17 @@ class JobTemplate(UnifiedJobTemplate, JobOptions, SurveyJobTemplateMixin, Resour
     @classmethod
     def _get_unified_job_field_names(cls):
         return set(f.name for f in JobOptions._meta.fields) | set(
-            ['name', 'description', 'organization', 'survey_passwords', 'labels', 'credentials', 'job_slice_number', 'job_slice_count', 'execution_environment']
+            [
+                'name',
+                'description',
+                'organization',
+                'survey_passwords',
+                'labels',
+                'credentials',
+                'job_slice_number',
+                'job_slice_count',
+                'execution_environment',
+            ]
         )
 
     @property
@@ -314,10 +333,13 @@ class JobTemplate(UnifiedJobTemplate, JobOptions, SurveyJobTemplateMixin, Resour
         actual_inventory = self.inventory
         if self.ask_inventory_on_launch and 'inventory' in kwargs:
             actual_inventory = kwargs['inventory']
+        actual_slice_count = self.job_slice_count
+        if self.ask_job_slice_count_on_launch and 'job_slice_count' in kwargs:
+            actual_slice_count = kwargs['job_slice_count']
         if actual_inventory:
-            return min(self.job_slice_count, actual_inventory.hosts.count())
+            return min(actual_slice_count, actual_inventory.hosts.count())
         else:
-            return self.job_slice_count
+            return actual_slice_count
 
     def save(self, *args, **kwargs):
         update_fields = kwargs.get('update_fields', [])
@@ -425,10 +447,15 @@ class JobTemplate(UnifiedJobTemplate, JobOptions, SurveyJobTemplateMixin, Resour
 
             field = self._meta.get_field(field_name)
             if isinstance(field, models.ManyToManyField):
-                old_value = set(old_value.all())
-                new_value = set(kwargs[field_name]) - old_value
-                if not new_value:
-                    continue
+                if field_name == 'instance_groups':
+                    # Instance groups are ordered so we can't make a set out of them
+                    old_value = old_value.all()
+                elif field_name == 'credentials':
+                    # Credentials have a weird pattern because of how they are layered
+                    old_value = set(old_value.all())
+                    new_value = set(kwargs[field_name]) - old_value
+                    if not new_value:
+                        continue
 
             if new_value == old_value:
                 # no-op case: Fields the same as template's value
@@ -449,6 +476,10 @@ class JobTemplate(UnifiedJobTemplate, JobOptions, SurveyJobTemplateMixin, Resour
                         rejected_data[field_name] = new_value
                         errors_dict[field_name] = _('Project does not allow override of branch.')
                         continue
+                elif field_name == 'job_slice_count' and (new_value > 1) and (self.get_effective_slice_ct(kwargs) <= 1):
+                    rejected_data[field_name] = new_value
+                    errors_dict[field_name] = _('Job inventory does not have enough hosts for slicing')
+                    continue
                 # accepted prompt
                 prompted_data[field_name] = new_value
             else:
@@ -540,12 +571,7 @@ class Job(UnifiedJob, JobOptions, SurveyJobMixin, JobNotificationMixin, TaskMana
         default=None,
         on_delete=models.SET_NULL,
     )
-    hosts = models.ManyToManyField(
-        'Host',
-        related_name='jobs',
-        editable=False,
-        through='JobHostSummary',
-    )
+    hosts = models.ManyToManyField('Host', related_name='jobs', editable=False, through='JobHostSummary', through_fields=('job', 'host'))
     artifacts = JSONBlob(
         default=dict,
         blank=True,
@@ -600,6 +626,19 @@ class Job(UnifiedJob, JobOptions, SurveyJobMixin, JobNotificationMixin, TaskMana
     def get_ui_url(self):
         return urljoin(settings.TOWER_URL_BASE, "/#/jobs/playbook/{}".format(self.pk))
 
+    def _set_default_dependencies_processed(self):
+        """
+        This sets the initial value of dependencies_processed
+        and here we use this as a shortcut to avoid the DependencyManager for jobs that do not need it
+        """
+        if (not self.project) or self.project.scm_update_on_launch:
+            self.dependencies_processed = False
+        elif (not self.inventory) or self.inventory.inventory_sources.filter(update_on_launch=True).exists():
+            self.dependencies_processed = False
+        else:
+            # No dependencies to process
+            self.dependencies_processed = True
+
     @property
     def event_class(self):
         if self.has_unpartitioned_events:
@@ -644,8 +683,7 @@ class Job(UnifiedJob, JobOptions, SurveyJobMixin, JobNotificationMixin, TaskMana
             raise ParseError(_('{status_value} is not a valid status option.').format(status_value=status))
         return self._get_hosts(**kwargs)
 
-    @property
-    def task_impact(self):
+    def _get_task_impact(self):
         if self.launch_type == 'callback':
             count_hosts = 2
         else:
@@ -755,19 +793,15 @@ class Job(UnifiedJob, JobOptions, SurveyJobMixin, JobNotificationMixin, TaskMana
 
     @property
     def preferred_instance_groups(self):
-        if self.organization is not None:
-            organization_groups = [x for x in self.organization.instance_groups.all()]
-        else:
-            organization_groups = []
-        if self.inventory is not None:
-            inventory_groups = [x for x in self.inventory.instance_groups.all()]
-        else:
-            inventory_groups = []
-        if self.job_template is not None:
-            template_groups = [x for x in self.job_template.instance_groups.all()]
-        else:
-            template_groups = []
-        selected_groups = template_groups + inventory_groups + organization_groups
+        # If the user specified instance groups those will be handled by the unified_job.create_unified_job
+        # This function handles only the defaults for a template w/o user specification
+        selected_groups = []
+        for obj_type in ['job_template', 'inventory', 'organization']:
+            if getattr(self, obj_type) is not None:
+                for instance_group in getattr(self, obj_type).instance_groups.all():
+                    selected_groups.append(instance_group)
+                if getattr(getattr(self, obj_type), 'prevent_instance_group_fallback', False):
+                    break
         if not selected_groups:
             return self.global_instance_groups
         return selected_groups
@@ -785,6 +819,9 @@ class Job(UnifiedJob, JobOptions, SurveyJobMixin, JobNotificationMixin, TaskMana
             for name in JOB_VARIABLE_PREFIXES:
                 r['{}_job_template_id'.format(name)] = self.job_template.pk
                 r['{}_job_template_name'.format(name)] = self.job_template.name
+        if self.execution_node:
+            for name in JOB_VARIABLE_PREFIXES:
+                r['{}_execution_node'.format(name)] = self.execution_node
         return r
 
     '''
@@ -799,71 +836,26 @@ class Job(UnifiedJob, JobOptions, SurveyJobMixin, JobNotificationMixin, TaskMana
     def get_notification_friendly_name(self):
         return "Job"
 
-    def _get_inventory_hosts(self, only=['name', 'ansible_facts', 'ansible_facts_modified', 'modified', 'inventory_id']):
-        if not self.inventory:
-            return []
-        return self.inventory.hosts.only(*only)
+    def get_hosts_for_fact_cache(self):
+        """
+        Builds the queryset to use for writing or finalizing the fact cache
+        these need to be the 'real' hosts associated with the job.
+        For constructed inventories, that means the original (input inventory) hosts
+        when slicing, that means only returning hosts in that slice
+        """
+        Host = JobHostSummary._meta.get_field('host').related_model
+        if not self.inventory_id:
+            return Host.objects.none()
 
-    def start_job_fact_cache(self, destination, modification_times, timeout=None):
-        self.log_lifecycle("start_job_fact_cache")
-        os.makedirs(destination, mode=0o700)
-        hosts = self._get_inventory_hosts()
-        if timeout is None:
-            timeout = settings.ANSIBLE_FACT_CACHE_TIMEOUT
-        if timeout > 0:
-            # exclude hosts with fact data older than `settings.ANSIBLE_FACT_CACHE_TIMEOUT seconds`
-            timeout = now() - datetime.timedelta(seconds=timeout)
-            hosts = hosts.filter(ansible_facts_modified__gte=timeout)
-        for host in hosts:
-            filepath = os.sep.join(map(str, [destination, host.name]))
-            if not os.path.realpath(filepath).startswith(destination):
-                system_tracking_logger.error('facts for host {} could not be cached'.format(smart_str(host.name)))
-                continue
-            try:
-                with codecs.open(filepath, 'w', encoding='utf-8') as f:
-                    os.chmod(f.name, 0o600)
-                    json.dump(host.ansible_facts, f)
-            except IOError:
-                system_tracking_logger.error('facts for host {} could not be cached'.format(smart_str(host.name)))
-                continue
-            # make note of the time we wrote the file so we can check if it changed later
-            modification_times[filepath] = os.path.getmtime(filepath)
+        if self.inventory.kind == 'constructed':
+            id_field = Host._meta.get_field('id')
+            host_qs = Host.objects.filter(id__in=self.inventory.hosts.exclude(instance_id='').values_list(Cast('instance_id', output_field=id_field)))
+        else:
+            host_qs = self.inventory.hosts
 
-    def finish_job_fact_cache(self, destination, modification_times):
-        self.log_lifecycle("finish_job_fact_cache")
-        for host in self._get_inventory_hosts():
-            filepath = os.sep.join(map(str, [destination, host.name]))
-            if not os.path.realpath(filepath).startswith(destination):
-                system_tracking_logger.error('facts for host {} could not be cached'.format(smart_str(host.name)))
-                continue
-            if os.path.exists(filepath):
-                # If the file changed since we wrote it pre-playbook run...
-                modified = os.path.getmtime(filepath)
-                if modified > modification_times.get(filepath, 0):
-                    with codecs.open(filepath, 'r', encoding='utf-8') as f:
-                        try:
-                            ansible_facts = json.load(f)
-                        except ValueError:
-                            continue
-                        host.ansible_facts = ansible_facts
-                        host.ansible_facts_modified = now()
-                        host.save()
-                        system_tracking_logger.info(
-                            'New fact for inventory {} host {}'.format(smart_str(host.inventory.name), smart_str(host.name)),
-                            extra=dict(
-                                inventory_id=host.inventory.id,
-                                host_name=host.name,
-                                ansible_facts=host.ansible_facts,
-                                ansible_facts_modified=host.ansible_facts_modified.isoformat(),
-                                job_id=self.id,
-                            ),
-                        )
-            else:
-                # if the file goes missing, ansible removed it (likely via clear_facts)
-                host.ansible_facts = {}
-                host.ansible_facts_modified = now()
-                system_tracking_logger.info('Facts cleared for inventory {} host {}'.format(smart_str(host.inventory.name), smart_str(host.name)))
-                host.save()
+        host_qs = host_qs.only(*HOST_FACTS_FIELDS)
+        host_qs = self.inventory.get_sliced_hosts(host_qs, self.job_slice_number, self.job_slice_count)
+        return host_qs
 
 
 class LaunchTimeConfigBase(BaseModel):
@@ -893,10 +885,36 @@ class LaunchTimeConfigBase(BaseModel):
     # This is a solution to the nullable CharField problem, specific to prompting
     char_prompts = JSONBlob(default=dict, blank=True)
 
-    def prompts_dict(self, display=False):
+    # Define fields that are not really fields, but alias to char_prompts lookups
+    limit = NullablePromptPseudoField('limit')
+    scm_branch = NullablePromptPseudoField('scm_branch')
+    job_tags = NullablePromptPseudoField('job_tags')
+    skip_tags = NullablePromptPseudoField('skip_tags')
+    diff_mode = NullablePromptPseudoField('diff_mode')
+    job_type = NullablePromptPseudoField('job_type')
+    verbosity = NullablePromptPseudoField('verbosity')
+    forks = NullablePromptPseudoField('forks')
+    job_slice_count = NullablePromptPseudoField('job_slice_count')
+    timeout = NullablePromptPseudoField('timeout')
+
+    # NOTE: additional fields are assumed to exist but must be defined in subclasses
+    # due to technical limitations
+    SUBCLASS_FIELDS = (
+        'instance_groups',  # needs a through model defined
+        'extra_vars',  # alternates between extra_vars and extra_data
+        'credentials',  # already a unified job and unified JT field
+        'labels',  # already a unified job and unified JT field
+        'execution_environment',  # already a unified job and unified JT field
+    )
+
+    def prompts_dict(self, display=False, for_cls=None):
         data = {}
+        if for_cls:
+            cls = for_cls
+        else:
+            cls = JobTemplate
         # Some types may have different prompts, but always subset of JT prompts
-        for prompt_name in JobTemplate.get_ask_mapping().keys():
+        for prompt_name in cls.get_ask_mapping().keys():
             try:
                 field = self._meta.get_field(prompt_name)
             except FieldDoesNotExist:
@@ -904,18 +922,23 @@ class LaunchTimeConfigBase(BaseModel):
             if isinstance(field, models.ManyToManyField):
                 if not self.pk:
                     continue  # unsaved object can't have related many-to-many
-                prompt_val = set(getattr(self, prompt_name).all())
-                if len(prompt_val) > 0:
-                    data[prompt_name] = prompt_val
+                prompt_values = list(getattr(self, prompt_name).all())
+                # Many to manys can't distinguish between None and []
+                # Because of this, from a config perspective, we assume [] is none and we don't save [] into the config
+                if len(prompt_values) > 0:
+                    data[prompt_name] = prompt_values
             elif prompt_name == 'extra_vars':
                 if self.extra_vars:
+                    extra_vars = {}
                     if display:
-                        data[prompt_name] = self.display_extra_vars()
+                        extra_vars = self.display_extra_vars()
                     else:
-                        data[prompt_name] = self.extra_vars
+                        extra_vars = self.extra_vars
                     # Depending on model, field type may save and return as string
-                    if isinstance(data[prompt_name], str):
-                        data[prompt_name] = parse_yaml_or_json(data[prompt_name])
+                    if isinstance(extra_vars, str):
+                        extra_vars = parse_yaml_or_json(extra_vars)
+                    if extra_vars:
+                        data['extra_vars'] = extra_vars
                 if self.survey_passwords and not display:
                     data['survey_passwords'] = self.survey_passwords
             else:
@@ -923,15 +946,6 @@ class LaunchTimeConfigBase(BaseModel):
                 if prompt_val is not None:
                     data[prompt_name] = prompt_val
         return data
-
-
-for field_name in JobTemplate.get_ask_mapping().keys():
-    if field_name == 'extra_vars':
-        continue
-    try:
-        LaunchTimeConfigBase._meta.get_field(field_name)
-    except FieldDoesNotExist:
-        setattr(LaunchTimeConfigBase, field_name, NullablePromptPseudoField(field_name))
 
 
 class LaunchTimeConfig(LaunchTimeConfigBase):
@@ -952,8 +966,18 @@ class LaunchTimeConfig(LaunchTimeConfigBase):
             blank=True,
         )
     )
-    # Credentials needed for non-unified job / unified JT models
+    # Fields needed for non-unified job / unified JT models, because they are defined on unified models
     credentials = models.ManyToManyField('Credential', related_name='%(class)ss')
+    labels = models.ManyToManyField('Label', related_name='%(class)s_labels')
+    execution_environment = models.ForeignKey(
+        'ExecutionEnvironment',
+        null=True,
+        blank=True,
+        default=None,
+        on_delete=polymorphic.SET_NULL,
+        related_name='%(class)s_as_prompt',
+        help_text="The container image to be used for execution.",
+    )
 
     @property
     def extra_vars(self):
@@ -995,6 +1019,11 @@ class JobLaunchConfig(LaunchTimeConfig):
         related_name='launch_config',
         on_delete=models.CASCADE,
         editable=False,
+    )
+
+    # Instance Groups needed for non-unified job / unified JT models
+    instance_groups = OrderedManyToManyField(
+        'InstanceGroup', related_name='%(class)ss', blank=True, editable=False, through='JobLaunchConfigInstanceGroupMembership'
     )
 
     def has_user_prompts(self, template):
@@ -1048,6 +1077,15 @@ class JobHostSummary(CreatedModifiedModel):
         editable=False,
     )
     host = models.ForeignKey('Host', related_name='job_host_summaries', null=True, default=None, on_delete=models.SET_NULL, editable=False)
+    constructed_host = models.ForeignKey(
+        'Host',
+        related_name='constructed_host_summaries',
+        null=True,
+        default=None,
+        on_delete=models.SET_NULL,
+        editable=False,
+        help_text='Only for jobs run against constructed inventories, this links to the host inside the constructed inventory.',
+    )
 
     host_name = models.CharField(
         max_length=1024,
@@ -1213,6 +1251,9 @@ class SystemJob(UnifiedJob, SystemJobOptions, JobNotificationMixin):
 
     extra_vars_dict = VarsDictProperty('extra_vars', True)
 
+    def _set_default_dependencies_processed(self):
+        self.dependencies_processed = True
+
     @classmethod
     def _get_parent_field_name(cls):
         return 'system_job_template'
@@ -1238,8 +1279,7 @@ class SystemJob(UnifiedJob, SystemJobOptions, JobNotificationMixin):
             return UnpartitionedSystemJobEvent
         return SystemJobEvent
 
-    @property
-    def task_impact(self):
+    def _get_task_impact(self):
         return 5
 
     @property

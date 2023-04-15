@@ -34,12 +34,12 @@ from social_core.backends.saml import SAMLIdentityProvider as BaseSAMLIdentityPr
 
 # Ansible Tower
 from awx.sso.models import UserEnterpriseAuth
+from awx.sso.common import create_org_and_teams, reconcile_users_org_team_mappings
 
 logger = logging.getLogger('awx.sso.backends')
 
 
 class LDAPSettings(BaseLDAPSettings):
-
     defaults = dict(list(BaseLDAPSettings.defaults.items()) + list({'ORGANIZATION_MAP': {}, 'TEAM_MAP': {}, 'GROUP_TYPE_PARAMS': {}}.items()))
 
     def __init__(self, prefix='AUTH_LDAP_', defaults={}):
@@ -68,6 +68,7 @@ class LDAPSettings(BaseLDAPSettings):
 
 
 class LDAPBackend(BaseLDAPBackend):
+
     """
     Custom LDAP backend for AWX.
     """
@@ -116,7 +117,17 @@ class LDAPBackend(BaseLDAPBackend):
             for setting_name, type_ in [('GROUP_SEARCH', 'LDAPSearch'), ('GROUP_TYPE', 'LDAPGroupType')]:
                 if getattr(self.settings, setting_name) is None:
                     raise ImproperlyConfigured("{} must be an {} instance.".format(setting_name, type_))
-            return super(LDAPBackend, self).authenticate(request, username, password)
+            ldap_user = super(LDAPBackend, self).authenticate(request, username, password)
+            # If we have an LDAP user and that user we found has an ldap_user internal object and that object has a bound connection
+            # Then we can try and force an unbind to close the sticky connection
+            if ldap_user and ldap_user.ldap_user and ldap_user.ldap_user._connection_bound:
+                logger.debug("Forcing LDAP connection to close")
+                try:
+                    ldap_user.ldap_user._connection.unbind_s()
+                    ldap_user.ldap_user._connection_bound = False
+                except Exception:
+                    logger.exception(f"Got unexpected LDAP exception when forcing LDAP disconnect for user {ldap_user}, login will still proceed")
+            return ldap_user
         except Exception:
             logger.exception("Encountered an error authenticating to LDAP")
             return None
@@ -316,31 +327,34 @@ class SAMLAuth(BaseSAMLAuth):
         return super(SAMLAuth, self).get_user(user_id)
 
 
-def _update_m2m_from_groups(user, ldap_user, related, opts, remove=True):
+def _update_m2m_from_groups(ldap_user, opts, remove=True):
     """
-    Hepler function to update m2m relationship based on LDAP group membership.
+    Hepler function to evaluate the LDAP team/org options to determine if LDAP user should
+      be a member of the team/org based on their ldap group dns.
+
+    Returns:
+        True - User should be added
+        False - User should be removed
+        None - Users membership should not be changed
     """
-    should_add = False
     if opts is None:
-        return
+        return None
     elif not opts:
         pass
-    elif opts is True:
-        should_add = True
+    elif isinstance(opts, bool) and opts is True:
+        return True
     else:
         if isinstance(opts, str):
             opts = [opts]
+        # If any of the users groups matches any of the list options
         for group_dn in opts:
             if not isinstance(group_dn, str):
                 continue
             if ldap_user._get_groups().is_member_of(group_dn):
-                should_add = True
-    if should_add:
-        user.save()
-        related.add(user)
-    elif remove and user in related.all():
-        user.save()
-        related.remove(user)
+                return True
+    if remove:
+        return False
+    return None
 
 
 @receiver(populate_user, dispatch_uid='populate-ldap-user')
@@ -349,8 +363,6 @@ def on_populate_user(sender, **kwargs):
     Handle signal from LDAP backend to populate the user object.  Update user
     organization/team memberships according to their LDAP groups.
     """
-    from awx.main.models import Organization, Team
-
     user = kwargs['user']
     ldap_user = kwargs['ldap_user']
     backend = ldap_user.backend
@@ -372,31 +384,49 @@ def on_populate_user(sender, **kwargs):
             force_user_update = True
             logger.warning('LDAP user {} has {} > max {} characters'.format(user.username, field, max_len))
 
-    # Update organization membership based on group memberships.
     org_map = getattr(backend.settings, 'ORGANIZATION_MAP', {})
-    for org_name, org_opts in org_map.items():
-        org, created = Organization.objects.get_or_create(name=org_name)
-        remove = bool(org_opts.get('remove', True))
-        admins_opts = org_opts.get('admins', None)
-        remove_admins = bool(org_opts.get('remove_admins', remove))
-        _update_m2m_from_groups(user, ldap_user, org.admin_role.members, admins_opts, remove_admins)
-        auditors_opts = org_opts.get('auditors', None)
-        remove_auditors = bool(org_opts.get('remove_auditors', remove))
-        _update_m2m_from_groups(user, ldap_user, org.auditor_role.members, auditors_opts, remove_auditors)
-        users_opts = org_opts.get('users', None)
-        remove_users = bool(org_opts.get('remove_users', remove))
-        _update_m2m_from_groups(user, ldap_user, org.member_role.members, users_opts, remove_users)
+    team_map_settings = getattr(backend.settings, 'TEAM_MAP', {})
+    orgs_list = list(org_map.keys())
+    team_map = {}
+    for team_name, team_opts in team_map_settings.items():
+        if not team_opts.get('organization', None):
+            # You can't save the LDAP config in the UI w/o an org (or '' or null as the org) so if we somehow got this condition its an error
+            logger.error("Team named {} in LDAP team map settings is invalid due to missing organization".format(team_name))
+            continue
+        team_map[team_name] = team_opts['organization']
 
-    # Update team membership based on group memberships.
-    team_map = getattr(backend.settings, 'TEAM_MAP', {})
-    for team_name, team_opts in team_map.items():
+    create_org_and_teams(orgs_list, team_map, 'LDAP')
+
+    # Compute in memory what the state is of the different LDAP orgs
+    org_roles_and_ldap_attributes = {'admin_role': 'admins', 'auditor_role': 'auditors', 'member_role': 'users'}
+    desired_org_states = {}
+    for org_name, org_opts in org_map.items():
+        remove = bool(org_opts.get('remove', True))
+        desired_org_states[org_name] = {}
+        for org_role_name in org_roles_and_ldap_attributes.keys():
+            ldap_name = org_roles_and_ldap_attributes[org_role_name]
+            opts = org_opts.get(ldap_name, None)
+            remove = bool(org_opts.get('remove_{}'.format(ldap_name), remove))
+            desired_org_states[org_name][org_role_name] = _update_m2m_from_groups(ldap_user, opts, remove)
+
+        # If everything returned None (because there was no configuration) we can remove this org from our map
+        # This will prevent us from loading the org in the next query
+        if all(desired_org_states[org_name][org_role_name] is None for org_role_name in org_roles_and_ldap_attributes.keys()):
+            del desired_org_states[org_name]
+
+    # Compute in memory what the state is of the different LDAP teams
+    desired_team_states = {}
+    for team_name, team_opts in team_map_settings.items():
         if 'organization' not in team_opts:
             continue
-        org, created = Organization.objects.get_or_create(name=team_opts['organization'])
-        team, created = Team.objects.get_or_create(name=team_name, organization=org)
         users_opts = team_opts.get('users', None)
         remove = bool(team_opts.get('remove', True))
-        _update_m2m_from_groups(user, ldap_user, team.member_role.members, users_opts, remove)
+        state = _update_m2m_from_groups(ldap_user, users_opts, remove)
+        if state is not None:
+            organization = team_opts['organization']
+            if organization not in desired_team_states:
+                desired_team_states[organization] = {}
+            desired_team_states[organization][team_name] = {'member_role': state}
 
     # Check if user.profile is available, otherwise force user.save()
     try:
@@ -412,3 +442,5 @@ def on_populate_user(sender, **kwargs):
     if profile.ldap_dn != ldap_user.dn:
         profile.ldap_dn = ldap_user.dn
         profile.save()
+
+    reconcile_users_org_team_mappings(user, desired_org_states, desired_team_states, 'LDAP')

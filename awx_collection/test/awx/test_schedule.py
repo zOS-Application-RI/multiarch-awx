@@ -6,7 +6,7 @@ import pytest
 
 from ansible.errors import AnsibleError
 
-from awx.main.models import Schedule
+from awx.main.models import JobTemplate, Schedule
 from awx.api.serializers import SchedulePreviewSerializer
 
 
@@ -22,6 +22,19 @@ def test_create_schedule(run_module, job_template, admin_user):
     assert result['changed']
 
     assert schedule.rrule == my_rrule
+
+
+@pytest.mark.django_db
+def test_delete_same_named_schedule(run_module, project, inventory, admin_user):
+    jt1 = JobTemplate.objects.create(name='jt1', project=project, inventory=inventory, playbook='helloworld.yml')
+    jt2 = JobTemplate.objects.create(name='jt2', project=project, inventory=inventory, playbook='helloworld2.yml')
+    Schedule.objects.create(name='Some Schedule', rrule='DTSTART:20300112T210000Z RRULE:FREQ=DAILY;INTERVAL=1', unified_job_template=jt1)
+    Schedule.objects.create(name='Some Schedule', rrule='DTSTART:20300112T210000Z RRULE:FREQ=DAILY;INTERVAL=1', unified_job_template=jt2)
+
+    result = run_module('schedule', {'name': 'Some Schedule', 'unified_job_template': 'jt1', 'state': 'absent'}, admin_user)
+    assert not result.get('failed', False), result.get('msg', result)
+
+    assert Schedule.objects.filter(name='Some Schedule').count() == 1
 
 
 @pytest.mark.parametrize(
@@ -68,7 +81,7 @@ def test_create_schedule(run_module, job_template, admin_user):
     ],
 )
 def test_rrule_lookup_plugin(collection_import, freq, kwargs, expect):
-    LookupModule = collection_import('plugins.lookup.schedule_rrule').LookupModule
+    LookupModule = collection_import('plugins.lookup.schedule_rrule').LookupModule()
     generated_rule = LookupModule.get_rrule(freq, kwargs)
     assert generated_rule == expect
     rrule_checker = SchedulePreviewSerializer()
@@ -79,7 +92,7 @@ def test_rrule_lookup_plugin(collection_import, freq, kwargs, expect):
 
 @pytest.mark.parametrize("freq", ('none', 'minute', 'hour', 'day', 'week', 'month'))
 def test_empty_schedule_rrule(collection_import, freq):
-    LookupModule = collection_import('plugins.lookup.schedule_rrule').LookupModule
+    LookupModule = collection_import('plugins.lookup.schedule_rrule').LookupModule()
     if freq == 'day':
         pfreq = 'DAILY'
     elif freq == 'none':
@@ -123,7 +136,7 @@ def test_empty_schedule_rrule(collection_import, freq):
     ],
 )
 def test_rrule_lookup_plugin_failure(collection_import, freq, kwargs, msg):
-    LookupModule = collection_import('plugins.lookup.schedule_rrule').LookupModule
+    LookupModule = collection_import('plugins.lookup.schedule_rrule').LookupModule()
     with pytest.raises(AnsibleError) as e:
         assert LookupModule.get_rrule(freq, kwargs)
     assert msg in str(e.value)
